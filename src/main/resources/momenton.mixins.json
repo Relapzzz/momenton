@@ -6,9 +6,11 @@
 	],
 	"client": [
 		"client.ChatHudAccessor",
+		"client.ChatScreenAccessor",
 		"client.ClientConnectionMixin",
 		"client.GameRendererInvoker",
 		"client.GameRendererMixin",
+		"client.TextFieldWidgetAccessor",
 		"client.playback.CameraMixin",
 		"client.playback.ClientPlayerEntityMixin",
 		"client.playback.MinecraftClientMixin",

@@ -6,6 +6,7 @@ import com.relapzz.momenton.record.Recorder;
 import com.relapzz.momenton.ui.ReplayBrowserScreen;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.input.KeyInput;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import org.lwjgl.glfw.GLFW;
@@ -45,11 +46,7 @@ public final class MomentonKeybinds {
 		}
 
 		while (openReplays.wasPressed()) {
-			if (ReplaySession.isPlaying()) {
-				ReplaySession.stop();
-			} else {
-				client.setScreen(new ReplayBrowserScreen(client.currentScreen));
-			}
+			openReplays(client);
 		}
 
 		while (togglePause.wasPressed()) {
@@ -62,6 +59,26 @@ public final class MomentonKeybinds {
 
 		while (seekForward.wasPressed()) {
 			ReplaySession.seek(ReplaySession.currentTick() + SEEK_TICKS);
+		}
+	}
+
+	public static void pressInScreen(MinecraftClient client, KeyInput key) {
+		if (openReplays.matchesKey(key)) {
+			openReplays(client);
+		} else if (togglePause.matchesKey(key)) {
+			ReplaySession.togglePause();
+		} else if (seekBack.matchesKey(key)) {
+			ReplaySession.seek(ReplaySession.currentTick() - SEEK_TICKS);
+		} else if (seekForward.matchesKey(key)) {
+			ReplaySession.seek(ReplaySession.currentTick() + SEEK_TICKS);
+		}
+	}
+
+	private static void openReplays(MinecraftClient client) {
+		if (ReplaySession.isPlaying()) {
+			ReplaySession.stop();
+		} else {
+			client.setScreen(new ReplayBrowserScreen(client.currentScreen));
 		}
 	}
 }
