@@ -293,6 +293,9 @@ All written in Wave 3, none observed.
   replay with the timeline over an undimmed view, split twice, reorder, trim two, undo all, redo, Ctrl+S
   writes `<replay>.momenton.json`, reload restores it, play follows the edited order, HUD toggles hide
   each element immediately and survive reopening, O toggles the editor.
+  Seeks: on `2026-09-01_22-14-15.momenton`, `[` around 700 shows no loading screen and no holes;
+  `[` around 1200 shows a brief screen then the Nether with Nether sky; from 1350 back before 1055 and
+  playing through both crossings keeps terrain intact; no `Ignoring chunk` in `latest.log`.
 - Expected rough edges from Wave 4: sounds already playing before an export's start tick are dropped
   (loops restart at frame 0); a sound can start up to a frame late; while the editor is open replayed
   inventory and chat screens are held back; any backward seek still flashes the loading screen until
