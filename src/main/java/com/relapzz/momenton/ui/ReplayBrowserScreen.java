@@ -4,6 +4,7 @@ import com.relapzz.momenton.Momenton;
 import com.relapzz.momenton.format.ReplayMetadata;
 import com.relapzz.momenton.format.ReplayReader;
 import com.relapzz.momenton.playback.ReplaySession;
+import com.relapzz.momenton.ui.editor.EditSession;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
@@ -33,6 +34,7 @@ public class ReplayBrowserScreen extends Screen {
 
 	private int selected = -1;
 	private ButtonWidget play;
+	private ButtonWidget edit;
 	private ButtonWidget export;
 	private ButtonWidget delete;
 
@@ -59,13 +61,16 @@ public class ReplayBrowserScreen extends Screen {
 		}
 
 		play = addDrawableChild(ButtonWidget.builder(Text.translatable("screen.momenton.play"), button -> play())
-				.dimensions(width / 2 - 155, height - 52, 100, 20)
+				.dimensions(width / 2 - 155, height - 52, 75, 20)
+				.build());
+		edit = addDrawableChild(ButtonWidget.builder(Text.translatable("screen.momenton.edit"), button -> edit())
+				.dimensions(width / 2 - 77, height - 52, 75, 20)
 				.build());
 		export = addDrawableChild(ButtonWidget.builder(Text.translatable("screen.momenton.export"), button -> export())
-				.dimensions(width / 2 - 50, height - 52, 100, 20)
+				.dimensions(width / 2 + 1, height - 52, 75, 20)
 				.build());
 		delete = addDrawableChild(ButtonWidget.builder(Text.translatable("screen.momenton.delete"), button -> delete())
-				.dimensions(width / 2 + 55, height - 52, 100, 20)
+				.dimensions(width / 2 + 79, height - 52, 75, 20)
 				.build());
 		addDrawableChild(ButtonWidget.builder(Text.translatable("gui.back"), button -> close())
 				.dimensions(width / 2 - 100, height - 28, 200, 20)
@@ -97,6 +102,7 @@ public class ReplayBrowserScreen extends Screen {
 	private void updateButtons() {
 		boolean chosen = selected >= 0 && selected < entries.size();
 		play.active = chosen && entries.get(selected).playable();
+		edit.active = play.active;
 		export.active = play.active;
 		delete.active = chosen;
 	}
@@ -105,6 +111,11 @@ public class ReplayBrowserScreen extends Screen {
 		Path file = entries.get(selected).file();
 		client.setScreen(null);
 		ReplaySession.open(client, file);
+	}
+
+	private void edit() {
+		Entry entry = entries.get(selected);
+		EditSession.open(client, entry.file(), entry.durationTicks());
 	}
 
 	private void export() {

@@ -4,6 +4,7 @@ import com.relapzz.momenton.Momenton;
 import com.relapzz.momenton.playback.ReplaySession;
 import com.relapzz.momenton.record.Recorder;
 import com.relapzz.momenton.ui.ReplayBrowserScreen;
+import com.relapzz.momenton.ui.editor.EditSession;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.input.KeyInput;
@@ -22,6 +23,7 @@ public final class MomentonKeybinds {
 	private static KeyBinding togglePause;
 	private static KeyBinding seekBack;
 	private static KeyBinding seekForward;
+	private static KeyBinding toggleEditor;
 
 	private MomentonKeybinds() {
 	}
@@ -32,6 +34,7 @@ public final class MomentonKeybinds {
 		togglePause = register("toggle_pause", GLFW.GLFW_KEY_P);
 		seekBack = register("seek_back", GLFW.GLFW_KEY_LEFT_BRACKET);
 		seekForward = register("seek_forward", GLFW.GLFW_KEY_RIGHT_BRACKET);
+		toggleEditor = register("toggle_editor", GLFW.GLFW_KEY_O);
 	}
 
 	private static KeyBinding register(String name, int key) {
@@ -60,6 +63,10 @@ public final class MomentonKeybinds {
 		while (seekForward.wasPressed()) {
 			ReplaySession.seek(ReplaySession.currentTick() + SEEK_TICKS);
 		}
+
+		while (toggleEditor.wasPressed()) {
+			EditSession.toggle(client);
+		}
 	}
 
 	public static void pressInScreen(MinecraftClient client, KeyInput key) {
@@ -71,6 +78,8 @@ public final class MomentonKeybinds {
 			ReplaySession.seek(ReplaySession.currentTick() - SEEK_TICKS);
 		} else if (seekForward.matchesKey(key)) {
 			ReplaySession.seek(ReplaySession.currentTick() + SEEK_TICKS);
+		} else if (toggleEditor.matchesKey(key)) {
+			EditSession.toggle(client);
 		}
 	}
 

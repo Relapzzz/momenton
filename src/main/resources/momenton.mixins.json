@@ -25,6 +25,7 @@
 		"client.export.ExportGameRendererMixin",
 		"client.export.ExportKeyboardMixin",
 		"client.export.ExportWindowMixin",
+		"client.hud.InGameHudMixin",
 		"client.playback.CameraMixin",
 		"client.playback.ClientPlayerEntityMixin",
 		"client.playback.ClientPlayerEntityTailMixin",
