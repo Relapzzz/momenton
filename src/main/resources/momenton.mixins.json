@@ -7,8 +7,12 @@
 	"client": [
 		"client.ChatHudAccessor",
 		"client.ClientConnectionMixin",
+		"client.ClientPlayerInteractionManagerMixin",
+		"client.ClientPlayerSoundMixin",
+		"client.ClientWorldMixin",
 		"client.GameRendererInvoker",
 		"client.GameRendererMixin",
+		"client.PacketApplyBatcherEntryMixin",
 		"client.playback.CameraMixin",
 		"client.playback.ClientPlayerEntityMixin",
 		"client.playback.MinecraftClientMixin",
