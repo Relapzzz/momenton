@@ -34,10 +34,17 @@ in **Not yet verified**.
     vehicle pose.
   - Wave 3: video export (`export/FfmpegProcess`, `FrameGrabber`, `ExportSession`, six export
     mixins), `ui/ExportScreen` with an Export button in the browser, and the `edit/` data model.
-- Wave 4 is running: game audio loopback in export, the editor timeline overlay with HUD toggles,
-  backward seek without the loading screen. Wave 5: export the edited sequence (several ranges), mic
-  commentary, hardening.
-- 23 client mixins; the first launch is itself a check (`defaultRequire = 1`).
+  - Wave 4 (merged 2026-10-09): game audio via OpenAL loopback in export (`audio/LoopbackRenderer`,
+    `mixin/client/audio/*`, `FfmpegProcess.mux`), the editor overlay (`ui/editor/EditorScreen`,
+    `EditSession`, Edit button in the browser, editor key O) and HUD toggles
+    (`edit/HudToggles`, `mixin/client/hud/InGameHudMixin`, saved in the project).
+  - Wave 4 also: seeks reuse the `ClientWorld` (`OfflineConnection.applySnapshot` drops the join after
+    the first load, clears the world in place, or sends a respawn when the snapshot is in another
+    dimension). Fixes a latent bug where seeking back from the Nether loaded Nether chunks into the
+    Overworld world (old rejoin reused the player). Seeks whose snapshot-to-target span crosses a
+    dimension still show the loading screen.
+- Wave 4 is fully merged (2026-10-09). Next is Wave 5, below.
+- 28 client mixins; the first launch is itself a check (`defaultRequire = 1`).
 - Decisions: the editor uses vanilla Screens and ImGui is dropped; export comes before the editor;
   existing comments stay, new code adds none.
 - Recordings in `run/momenton/recordings/`:
@@ -112,7 +119,11 @@ Wave 3:
 - The first build on a clean machine (or clean Gradle cache) needs network for the `1.17-SNAPSHOT` Loom.
 - A seek inside a dimension crossing shows entities before terrain. That is faithful; only a bug if
   terrain stays missing while playing (check `latest.log` for `Ignoring chunk`).
-- A backward seek flashes the terrain-loading screen (it rejoins). Wave 4 removes it.
+- A seek whose snapshot-to-target span crosses a dimension still shows the loading screen (every new
+  `ClientWorld` resets the renderer). Removing it needs an extra snapshot right after each dimension
+  change, recorded.
+- `ExportSession.terrainBuilt()` does not check `ClientWorld.chunkUpdaters`, which drains at most 10%
+  per frame; a frame right after a seek could be grabbed before every snapshot chunk is scheduled.
 - `jump()` leaves the tick where it was, so the first tick after a seek shows the same tick twice.
   Export compensates by aiming at `target + 1`; preview still shows it.
 - Export: a frame re-rendered while waiting for chunks gets extra screen-animation delta, and
@@ -208,18 +219,25 @@ All written in Wave 3, none observed.
 
 ## Phase 5 - Game audio (Wave 4)
 
-- [ ] `mixin/client/SoundEngineMixin`: open an OpenAL loopback device while exporting
-- [ ] `audio/LoopbackRenderer`: `alcRenderSamplesSOFT` for exactly the samples of each frame
-- [ ] Mux game audio with ffmpeg
+- [ ] `mixin/client/audio/SoundEngineMixin`: loopback device (48 kHz stereo s16) swapped in by
+      `reloadSounds()` while exporting, restored after, also on cancel and error (written, unverified)
+- [ ] `audio/LoopbackRenderer`: `alcRenderSamplesSOFT` for `round(k*48000/fps)` cumulative samples per
+      grabbed frame; sound loads blocked on and device-change polling off while exporting (written,
+      unverified)
+- [ ] Mux: `ffmpeg -nostdin -y -i video -f s16le -ar 48000 -ac 2 -i pcm -c:v copy -c:a aac -b:a 192k
+      -shortest out` (written, unverified)
 - [ ] **Gate:** audio in sync at the end of a 30 s export
 
 ## Phase 6 - Editor on vanilla Screens
 
 - [ ] `edit/Clip`, `Timeline`, `TimelineResolver`, `UndoStack`, `Project` (`<replay>.momenton.json`)
       as pure data (Wave 3). JUnit tests observed passing; no UI uses it yet
-- [ ] Timeline overlay screen on playback: trim, split, reorder, undo (Wave 4)
-- [ ] Backward seeks without the loading screen (reuse the `ClientWorld`) (Wave 4)
-- [ ] HUD toggles via `InGameHudMixin` (Wave 4)
+- [ ] Timeline overlay screen on playback: trim, split, reorder, delete, undo/redo, save, preview
+      follows the edit (Wave 4; written, unverified)
+- [ ] Backward seeks without the loading screen: world reused in place; dimension-crossing seeks
+      still show it (Wave 4; written, unverified)
+- [ ] HUD toggles via `InGameHudMixin`, ten elements, saved in the project (Wave 4; written,
+      unverified)
 - [ ] Export the edited sequence (several ranges) through the same `ExportSession` (Wave 5)
 - [ ] **Gate:** split into three clips, reorder, trim two, undo all, reload from disk, play back as
       continuous video in the edited order, HUD toggles taking effect immediately
@@ -250,12 +268,41 @@ All written in Wave 3, none observed.
 
 ## Next session
 
-One in-game pass covers everything written since Phase 2. Wave 4 items are appended here when it
-merges. Report each step as pass or fail with what was seen.
+**First, finish Wave 4 and run Wave 5** (coordinator, parallel agents in worktrees, then merge, build,
+`checkReplay`, update this file):
+- Wave 5 tasks:
+  1. Export the edited sequence: `ExportSettings` takes the ordered ranges from
+     `TimelineResolver.exportRanges()`, `ExportSession` seeks between ranges, the editor's Export uses it.
+  2. `ScreenCursorMixin` must only override the cursor for replay screens
+     (`ReplayScreenInput.isReplayScreen`), not the editor.
+  3. `ReplaySession.currentTick()` is one past the shown tick after a normal tick but equal to it after
+     `jump()`; make them consistent (and update `ExportSession`'s `+1` and the editor's stepping).
+  4. Add `ReplaySession.file()` so the editor key works for a replay opened with Play.
+  5. Register `EditSession`'s tick in `MomentonClient` instead of its own listener.
+  6. Restore a permanent JUnit round-trip test for `HudToggles` in `Project`.
+  7. Docs: plan says the audio design is "how ReplayMod Audio Render works" (it was built from
+     1.21.11 bytecode, not ReplayMod) and lists old audio paths; record Wave 4 in both docs.
+  8. `ExportSession.terrainBuilt()` also waits for `ClientWorld.chunkUpdaters` to drain; the editor
+     reopens itself after a seek that showed `LevelLoadingScreen`.
+  9. Docs: replace "a seek rebuilds with a fresh connection" in the plan (Phase 2, Phase 6, Lessons)
+     with the reuse-in-place design.
+  10. Then Phase 7 mic commentary and Phase 8 hardening.
+- Wave 4 in-game items to append to the list below: export has AAC 48 kHz audio matching the video
+  length, in sync at start and end (also at 144 fps), speakers silent during export and working after,
+  Esc restores sound and leaves no `momenton-video-*`/`momenton-audio-*.pcm`; editor: Edit opens the
+  replay with the timeline over an undimmed view, split twice, reorder, trim two, undo all, redo, Ctrl+S
+  writes `<replay>.momenton.json`, reload restores it, play follows the edited order, HUD toggles hide
+  each element immediately and survive reopening, O toggles the editor.
+- Expected rough edges from Wave 4: sounds already playing before an export's start tick are dropped
+  (loops restart at frame 0); a sound can start up to a frame late; while the editor is open replayed
+  inventory and chat screens are held back; any backward seek still flashes the loading screen until
+  a dimension is crossed.
+
+**Then the user's single in-game pass.** Report each step as pass or fail with what was seen.
 
 1. Install ffmpeg (`winget install ffmpeg`, new terminal, `ffmpeg -version`), then `gradlew.bat test`:
    the 3 skipped `FfmpegProcess` encode tests now pass. Launch `gradlew.bat runClient`: no mixin
-   apply error (23 client mixins).
+   apply error (28 client mixins).
 2. Browser: title and empty message draw; rows read `world   m:ss   date`.
 3. On `2026-09-01_22-14-15.momenton`: sweeps at 411-433, crits at 89 and 1624; swing bursts at 16-28,
    148-159, 168-178; `P` mid-swing freezes everything without shaking; `]` from near the start keeps
