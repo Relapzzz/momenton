@@ -91,7 +91,7 @@ class ReplayFormatTest {
 		int total = frames;
 		writer.finish(1200, chunks -> new ReplayMetadata(ReplayMetadata.FORMAT_VERSION, "1.21.11", "1.0.0",
 				System.currentTimeMillis(), 1200, total, ReplayWriter.CHUNK_TICKS, "Test World", "minecraft:overworld",
-				chunks, List.of()), output);
+				chunks, List.of(), 1920, 1080, 3), output);
 
 		assertFalse(Files.exists(staging));
 		assertEquals(56L * frames, frameBytes);

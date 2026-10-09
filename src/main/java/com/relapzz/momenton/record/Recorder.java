@@ -78,6 +78,9 @@ public final class Recorder {
 
 	private final String worldName;
 	private final String initialDimension;
+	private final int framebufferWidth;
+	private final int framebufferHeight;
+	private final int guiScale;
 	private final Path staging;
 	private final Path output;
 	private final long startedAtEpochMs = System.currentTimeMillis();
@@ -99,6 +102,10 @@ public final class Recorder {
 		this.localPlayer = new LocalPlayerWriter(handler.getRegistryManager());
 		this.worldName = worldName(client);
 		this.initialDimension = client.world.getRegistryKey().getValue().toString();
+		Window window = client.getWindow();
+		this.framebufferWidth = window.getFramebufferWidth();
+		this.framebufferHeight = window.getFramebufferHeight();
+		this.guiScale = window.getScaleFactor();
 		this.writer = new ReplayWriter(staging, 0);
 		this.io = Executors.newSingleThreadExecutor(runnable -> new Thread(runnable, "Momenton-Writer"));
 		this.frames = new FrameTrackWriter(io, writer);
@@ -534,7 +541,10 @@ public final class Recorder {
 				worldName,
 				initialDimension,
 				chunks,
-				List.copyOf(dimensionChanges));
+				List.copyOf(dimensionChanges),
+				framebufferWidth,
+				framebufferHeight,
+				guiScale);
 	}
 
 	/** The save name in singleplayer, the server entry's name otherwise. Vanilla resolves it this way. */
