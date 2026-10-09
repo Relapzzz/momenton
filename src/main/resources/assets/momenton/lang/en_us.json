@@ -9,5 +9,21 @@
   "screen.momenton.open": "Replays",
   "screen.momenton.play": "Play",
   "screen.momenton.delete": "Delete",
-  "screen.momenton.empty": "No recordings yet. Press F9 in a world to make one."
+  "screen.momenton.empty": "No recordings yet. Press F9 in a world to make one.",
+  "screen.momenton.export": "Export",
+  "screen.momenton.export.title": "Export Video",
+  "screen.momenton.export.resolution": "Width x height",
+  "screen.momenton.export.fps": "Frame rate",
+  "screen.momenton.export.range": "Start / end (s)",
+  "screen.momenton.export.output": "Output file",
+  "screen.momenton.export.ffmpeg": "ffmpeg path",
+  "screen.momenton.export.cursor": "Draw cursor",
+  "screen.momenton.export.no_ffmpeg": "ffmpeg not found. Install ffmpeg or enter its path.",
+  "screen.momenton.export.error.size": "Width and height must be positive even numbers.",
+  "screen.momenton.export.error.fps": "Frame rate must be a whole number from 24 to 240.",
+  "screen.momenton.export.error.range": "Start and end must be numbers of seconds.",
+  "screen.momenton.export.error.order": "Start must be before end.",
+  "screen.momenton.export.error.output": "Enter an output file path.",
+  "screen.momenton.export.error.ffmpeg": "No ffmpeg program at that path.",
+  "screen.momenton.export.error.folder": "Could not create the output folder."
 }

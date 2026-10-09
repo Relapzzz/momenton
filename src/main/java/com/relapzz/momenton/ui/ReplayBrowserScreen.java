@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.stream.Stream;
 
 /**
- * Picks a recording to play. Vanilla widgets, because the editor's own toolkit is Phase 4 and this
+ * Picks a recording to play or export. Vanilla widgets, because the editor's own toolkit is Phase 4 and this
  * only has to be usable.
  */
 public class ReplayBrowserScreen extends Screen {
@@ -33,6 +33,7 @@ public class ReplayBrowserScreen extends Screen {
 
 	private int selected = -1;
 	private ButtonWidget play;
+	private ButtonWidget export;
 	private ButtonWidget delete;
 
 	public ReplayBrowserScreen(Screen parent) {
@@ -58,10 +59,13 @@ public class ReplayBrowserScreen extends Screen {
 		}
 
 		play = addDrawableChild(ButtonWidget.builder(Text.translatable("screen.momenton.play"), button -> play())
-				.dimensions(width / 2 - 155, height - 52, 150, 20)
+				.dimensions(width / 2 - 155, height - 52, 100, 20)
+				.build());
+		export = addDrawableChild(ButtonWidget.builder(Text.translatable("screen.momenton.export"), button -> export())
+				.dimensions(width / 2 - 50, height - 52, 100, 20)
 				.build());
 		delete = addDrawableChild(ButtonWidget.builder(Text.translatable("screen.momenton.delete"), button -> delete())
-				.dimensions(width / 2 + 5, height - 52, 150, 20)
+				.dimensions(width / 2 + 55, height - 52, 100, 20)
 				.build());
 		addDrawableChild(ButtonWidget.builder(Text.translatable("gui.back"), button -> close())
 				.dimensions(width / 2 - 100, height - 28, 200, 20)
@@ -73,10 +77,10 @@ public class ReplayBrowserScreen extends Screen {
 	@Override
 	public void render(DrawContext context, int mouseX, int mouseY, float deltaTicks) {
 		super.render(context, mouseX, mouseY, deltaTicks);
-		context.drawCenteredTextWithShadow(textRenderer, title, width / 2, 16, 0xFFFFFF);
+		context.drawCenteredTextWithShadow(textRenderer, title, width / 2, 16, 0xFFFFFFFF);
 		if (entries.isEmpty()) {
 			context.drawCenteredTextWithShadow(textRenderer,
-					Text.translatable("screen.momenton.empty"), width / 2, height / 2, 0xA0A0A0);
+					Text.translatable("screen.momenton.empty"), width / 2, height / 2, 0xFFA0A0A0);
 		}
 	}
 
@@ -93,6 +97,7 @@ public class ReplayBrowserScreen extends Screen {
 	private void updateButtons() {
 		boolean chosen = selected >= 0 && selected < entries.size();
 		play.active = chosen && entries.get(selected).playable();
+		export.active = play.active;
 		delete.active = chosen;
 	}
 
@@ -100,6 +105,11 @@ public class ReplayBrowserScreen extends Screen {
 		Path file = entries.get(selected).file();
 		client.setScreen(null);
 		ReplaySession.open(client, file);
+	}
+
+	private void export() {
+		Entry entry = entries.get(selected);
+		client.setScreen(new ExportScreen(this, entry.file(), entry.durationTicks()));
 	}
 
 	private void delete() {
@@ -135,12 +145,12 @@ public class ReplayBrowserScreen extends Screen {
 					metadata.describeWorld(),
 					seconds / 60, seconds % 60,
 					WHEN.format(Instant.ofEpochMilli(metadata.createdAtEpochMs())));
-			return new Entry(file, Text.literal(summary + (playable ? "" : "   (too old to play)")), playable);
+			return new Entry(file, Text.literal(summary + (playable ? "" : "   (too old to play)")), playable, metadata.durationTicks());
 		} catch (IOException e) {
-			return new Entry(file, Text.literal(file.getFileName() + "   (unreadable)"), false);
+			return new Entry(file, Text.literal(file.getFileName() + "   (unreadable)"), false, 0);
 		}
 	}
 
-	private record Entry(Path file, Text label, boolean playable) {
+	private record Entry(Path file, Text label, boolean playable, int durationTicks) {
 	}
 }
