@@ -1,0 +1,30 @@
+{
+	"schemaVersion": 1,
+	"id": "momenton",
+	"version": "${version}",
+	"name": "Momenton",
+	"description": "Records gameplay as state rather than pixels, then re-renders it into video inside the client. Recording, editing and export without external software.",
+	"authors": [
+		"relapzz"
+	],
+	"license": "CC0-1.0",
+	"icon": "assets/momenton/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.relapzz.momenton.Momenton"
+		],
+		"client": [
+			"com.relapzz.momenton.MomentonClient"
+		]
+	},
+	"mixins": [
+		"momenton.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.19.3",
+		"minecraft": "~1.21.11",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}

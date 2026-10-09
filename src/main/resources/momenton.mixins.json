@@ -1,0 +1,23 @@
+{
+	"required": true,
+	"package": "com.relapzz.momenton.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"mixins": [
+	],
+	"client": [
+		"client.ChatHudAccessor",
+		"client.ClientConnectionMixin",
+		"client.GameRendererInvoker",
+		"client.GameRendererMixin",
+		"client.playback.CameraMixin",
+		"client.playback.ClientPlayerEntityMixin",
+		"client.playback.MinecraftClientMixin",
+		"client.playback.MouseMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	},
+	"overwrites": {
+		"requireAnnotations": true
+	}
+}

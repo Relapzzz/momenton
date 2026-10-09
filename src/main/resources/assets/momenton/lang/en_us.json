@@ -1,0 +1,13 @@
+{
+  "key.category.momenton.main": "Momenton",
+  "key.momenton.toggle_recording": "Start / stop recording",
+  "key.momenton.open_replays": "Replays / stop playback",
+  "key.momenton.toggle_pause": "Pause / resume playback",
+  "key.momenton.seek_back": "Back 10 seconds",
+  "key.momenton.seek_forward": "Forward 10 seconds",
+  "screen.momenton.replays": "Momenton Replays",
+  "screen.momenton.open": "Replays",
+  "screen.momenton.play": "Play",
+  "screen.momenton.delete": "Delete",
+  "screen.momenton.empty": "No recordings yet. Press F9 in a world to make one."
+}
