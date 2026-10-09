@@ -28,15 +28,20 @@ in **Not yet verified**.
 - Phases 0-2 (foundations, recording, playback with seeking) are complete and observed.
 - Phase 3 (replay fidelity) is in progress: the replayed player walks its path, carries its items,
   and follows hotbar and chat scroll. Tasks 1-12 below are the rest.
-- Git repository initialised with a baseline commit.
-- Decisions: the editor uses vanilla Screens and ImGui is dropped (imgui dependencies come out of the
-  build in Wave 0); export comes before the editor; existing comments stay, new code adds none.
+- Git repository on `main`. Wave 0 and Wave 1 are merged: imgui removed, tools on Gradle, seek
+  state merge, perspective restore, snapshot-boundary race fix, snapshot timing log, finalise on
+  write failure, `Recorder.synthesise`. All of Wave 1 is written and unobserved in game.
+- Decisions: the editor uses vanilla Screens and ImGui is dropped; export comes before the editor;
+  existing comments stay, new code adds none.
 - Recordings in `run/momenton/recordings/`:
   - `2026-09-01_22-14-15.momenton`: 1752 ticks, the combat case. 46 swing starts (9 restarts), hits at
     89, 311, 411, 432, 1624, sweeps at 412 and 433, crits at 91 and 1625, Nether at 1055, back at 1265.
   - `2026-09-01_21-53-17.momenton`: 1782 ticks, the `UI_STATE` recording.
-- Last build: succeeded through Sep 1, all offline checks ALL PASS on both recordings. Gradle's cache
-  was cleaned since, so the next build needs network.
+- Last build: `gradlew build --offline` green with the JUnit format test, and
+  `gradlew checkReplay -Preplay=<abs path>` ALL PASS (Inspect, Setup, Motion, Swing, Boundary) on both
+  recordings. This machine's JVM needs `-Djavax.net.ssl.trustStoreType=Windows-ROOT` in `org.gradle.jvmargs`
+  to download dependencies; keep it in the user-level `~/.gradle/gradle.properties`, not the project
+  file, because CI runs on Ubuntu.
 
 ## Not yet verified
 
@@ -60,6 +65,14 @@ in **Not yet verified**.
   hotbar was observed with the `LOCAL_PLAYER` box; confirm on the next playthrough and close.
 - **Sneak fix** (sneak as a frame flag fed through a real `Input`): crouch observed once, no recording
   re-checks it.
+- **Seek state merge** (task 2): a `]` seek across a slot or hotbar change keeps it, and the seek fires
+  no swing. 1x playback should be unchanged.
+- **Perspective restore** (task 4): after a replay ends or is left, the viewer's own perspective is back.
+- **Snapshot-boundary race fix** (task 3): `Boundary` passes on both recordings but neither has a chunk
+  or spawn packet on a boundary tick, so it proves nothing yet. Needs a recording that flies across
+  chunk borders around ticks 500, 1000 and 1500.
+- **Snapshot timing** (task 4): read the `Snapshot N took X ms` lines in `run/logs/latest.log`.
+- **Finalise on write failure** (task 4): untested; needs a forced write failure.
 
 ## Known issues
 
@@ -74,16 +87,17 @@ in **Not yet verified**.
 - Sprinting is recorded (`FLAG_SPRINTING`) but not applied; FOV is already in `frames.bin`.
 - The driven player never calls `Entity.move`: no footsteps, no sprint particles, never `onGround`.
 - The tab list is not in the snapshot (`Ignoring player info update for unknown player`).
-- Snapshot capture blocks the client thread every 500 ticks, not only at F9. Measure it now (task 4).
+- Snapshot capture blocks the client thread every 500 ticks, not only at F9. Now logged; read the numbers.
 - `ClientWorld.shouldTickTimeOfDay` is private, so a snapshot always says time advances (up to 1 s drift).
 - The rebuilt join keeps the original `seed` and `isFlat` (not readable from `ClientWorld`).
 - `local = false` registry flag for `OfflineConnection` is unresolved: non-synced tags may differ.
 - `RenderTickCounter.Constant` has a package-private constructor; export needs an access widener.
 - Pause menu frames are recorded as ordinary frames (tick advances while the world is frozen).
-- **Forward seek loses state:** `UiStateDriver.accept` / `LocalPlayerDriver.acceptState` replace rather
-  than merge, so slot or hotbar changes inside a `]` span are lost (task 2).
-- **Snapshot-boundary race:** a packet stamped `at` but applied after the boundary snapshot is in
-  neither the snapshot nor the replay; a chunk or spawn becomes a permanent hole after a seek (task 3).
+- **Snapshot-boundary race, residue:** two narrow windows remain after task 3. A packet whose stamp is
+  read just before the boundary drain but queued just after is lost; one stamped `at+1` but drained by
+  `apply()` is in the snapshot and replayed again (harmless for chunks and blocks, a relative entity
+  move applies twice until the next position sync). Closing both needs the stamp and the queuing to be
+  atomic in `ClientConnectionMixin`.
 - **Container inventory moves are not recorded;** clicks are client-predicted and the server only
   corrects disagreements (task 6).
 - **Containers never close in a replay;** closing is client-initiated and nothing applies it (task 7).
@@ -92,9 +106,6 @@ in **Not yet verified**.
   (task 8).
 - **Mouse is stored in scaled GUI pixels** at the recording's resolution (task 9).
 - **No drawn cursor:** the OS draws it, so an export needs a sprite (Phase 4).
-- **Perspective is not restored after playback;** `applyPerspective` overwrites the viewer's option
-  (task 4).
-- **A write failure deletes the whole recording** (`writer.abort()`); it should finalise (task 4).
 
 ---
 
@@ -123,16 +134,17 @@ Goal: playback of blocks, a chest, item moves, chat typing and a portal looks ri
 - [x] Apply `UI_STATE`: selected slot and chat scroll
 - [x] The attack needs no replay on 1.21.11; every effect is on the wire (removal itself unwatched)
 - [x] 1a. `git init` and baseline commit (Wave 0, coordinator)
-- [ ] 1b. Remove the imgui dependencies from `build.gradle` (Wave 0, coordinator)
-- [ ] 1c. `tools` source set, `checkReplay -Preplay=<file>` JavaExec task, `Verify` as a JUnit test,
-      delete the committed `.class` files (Wave 1, Tools)
+- [x] 1b. Remove the imgui dependencies from `build.gradle` (Wave 0, coordinator)
+- [x] 1c. `tools` source set, `checkReplay -Preplay=<file>` and `runTool` tasks, `Verify` as a JUnit
+      test, `.class` files gone (Wave 1, Tools). Observed: build runs the test, checkReplay ALL PASS
 - [ ] 2. Seek state merge: merge partial `UI_STATE` / `LOCAL_PLAYER` field by field; during a seek keep
-      only the latest swing and cooldown and drop the events (Wave 1, Playback fixes)
+      only the latest swing and cooldown and drop the events (Wave 1, Playback fixes; written, unverified)
 - [ ] 3. Snapshot-boundary race: stamp `at+1`, drain `client.getPacketApplyBatcher().apply()`, then
       snapshot; `submitBatch(at)` leaves `at+1` entries queued (Wave 1, Recorder fixes). Its offline
-      check (Wave 1, Tools)
+      check `Boundary` (Wave 1, Tools). Written, unverified in game
 - [ ] 4. Restore the viewer's perspective on `stop` (Wave 1, Playback fixes). Log snapshot capture
-      time, finalise on write failure, add `Recorder.synthesise(Packet<?>)` (Wave 1, Recorder fixes)
+      time, finalise on write failure, add `Recorder.synthesise(Packet<?>)` (Wave 1, Recorder fixes).
+      Written, unverified
 - [ ] 5. Local prediction as synthesised packets: one `ClientWorld` mixin on `syncWorldEvent`,
       `playSound`, `setBlockBreakingInfo` for the local player, skipping calls from inside network
       handlers (Wave 2, Local prediction)
@@ -209,17 +221,21 @@ Goal: playback of blocks, a chest, item moves, chat typing and a portal looks ri
 
 ## Next session
 
-1. Run `gradlew.bat build` once with network access.
-2. In-game verification batch on `2026-09-01_22-14-15.momenton`. Nothing needs recording unless a step
-   fails:
+1. In-game batch on `2026-09-01_22-14-15.momenton` (existing items plus Wave 1). Nothing needs
+   recording unless a step fails:
    1. Around ticks 411-433 (two sweeps back to back): sweep arc, mob flash and knockback, sweep sound.
       Around ticks 89 and 1624: crit particles. If missing, `tools/Effects` proves the packets are in
       the file, so check `run/logs/latest.log` for which end lost them.
    2. Around ticks 16-28, 148-159 and 168-178: the arm keeps swinging through each burst.
    3. Press `P` mid-swing: arm, cooldown ring, mobs, particles and items stop dead. Nothing shakes.
       Unpause: it resumes without a jump.
-   4. Leave playback via the pause menu's Disconnect, and separately by closing the window. Neither
-      crashes with `ClosedChannelException`.
+   4. Pause near the start, then `]` repeatedly: the selected hotbar slot and hotbar contents always
+      match where it lands, and no swing fires on landing. Then play at 1x: swings look as before.
    5. Seek across the Nether crossings at 1055 and 1265; each lands in the right dimension.
-3. Continue the waves: Wave 1 (Docs, Tools, Playback fixes, Recorder fixes), then Wave 2. After each
-   wave the coordinator merges, runs `build` and `checkReplay`, and the user does one in-game pass.
+   6. Set your view to first person, then leave playback via the pause menu's Disconnect: no
+      `ClosedChannelException`, and you are still in first person. Repeat by closing the window.
+2. Make one new recording, over 75 s, flying fast across chunk borders around 25 s, 50 s and 75 s.
+   Run `checkReplay` on it (Boundary now has something to test) and read the `Snapshot N took X ms`
+   lines in `run/logs/latest.log`.
+3. Start Wave 2 (Local prediction, Screens, Cursor, Body state). After it, the coordinator merges,
+   runs `build` and `checkReplay`, and the user does one in-game pass.
