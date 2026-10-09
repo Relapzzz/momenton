@@ -20,12 +20,6 @@ dependencies {
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-
-	// Editor UI. Note the deliberate absence of imgui-java-lwjgl3: its ImGuiImplGl3
-	// backend is built on LWJGL GL33, which VulkanMod would break. Momenton renders
-	// ImGui draw lists through Blaze3D instead. See ui/imgui/ImGuiBlaze3DRenderer.
-	implementation include("io.github.spair:imgui-java-binding:${project.imgui_version}")
-	implementation include("io.github.spair:imgui-java-natives-windows:${project.imgui_version}")
 }
 
 processResources {

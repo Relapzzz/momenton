@@ -43,3 +43,4 @@ replay_*.log
 
 CLAUDE.local.md
 tools/*.class
+.claude/
