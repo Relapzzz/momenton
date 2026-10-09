@@ -83,7 +83,18 @@ public final class LocalPlayerDriver {
 	 * shows the item never moving.
 	 */
 	static void acceptState(byte[] payload, DynamicRegistryManager registries) {
-		state = LocalPlayerCodec.decode(payload, registries);
+		state = merge(state, LocalPlayerCodec.decode(payload, registries));
+	}
+
+	private static LocalPlayerCodec.State merge(LocalPlayerCodec.State earlier, LocalPlayerCodec.State later) {
+		if (earlier == null) {
+			return later;
+		}
+		LocalPlayerCodec.State vitals = later.hasVitals() ? later : earlier;
+		return new LocalPlayerCodec.State(vitals.hasVitals(), vitals.health(), vitals.food(), vitals.saturation(),
+				vitals.air(), vitals.experienceLevel(), vitals.experienceProgress(),
+				later.hotbar() != null ? later.hotbar() : earlier.hotbar(),
+				later.offhand() != null ? later.offhand() : earlier.offhand());
 	}
 
 	/** Client thread, head of the replayed player's tick. Applied before vanilla reads any of it. */

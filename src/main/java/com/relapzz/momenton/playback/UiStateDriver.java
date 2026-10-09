@@ -52,10 +52,40 @@ public final class UiStateDriver {
 
 	static void accept(byte[] payload) {
 		try {
-			pending = UiStateCodec.decode(payload);
+			pending = merge(pending, UiStateCodec.decode(payload));
 		} catch (IOException e) {
 			Momenton.LOGGER.error("Could not decode a UI state action", e);
 		}
+	}
+
+	static void settle() {
+		UiStateCodec.State state = pending;
+		if (state == null) {
+			return;
+		}
+		if (state.has(UiStateCodec.FLAG_SWING)) {
+			swinging = state.swinging();
+			swingTicks = state.swingTicks();
+		}
+		if (state.has(UiStateCodec.FLAG_COOLDOWN)) {
+			cooldown = state.cooldown();
+		}
+		pending = new UiStateCodec.State(state.flags() & ~(UiStateCodec.FLAG_SWING | UiStateCodec.FLAG_COOLDOWN),
+				state.selectedSlot(), state.screen(), state.chatScroll(), state.swing(), state.swingTicks(), state.cooldown());
+	}
+
+	private static UiStateCodec.State merge(UiStateCodec.State earlier, UiStateCodec.State later) {
+		if (earlier == null) {
+			return later;
+		}
+		boolean swing = later.has(UiStateCodec.FLAG_SWING);
+		return new UiStateCodec.State(earlier.flags() | later.flags(),
+				later.has(UiStateCodec.FLAG_SELECTED_SLOT) ? later.selectedSlot() : earlier.selectedSlot(),
+				later.has(UiStateCodec.FLAG_SCREEN) ? later.screen() : earlier.screen(),
+				later.has(UiStateCodec.FLAG_CHAT_SCROLL) ? later.chatScroll() : earlier.chatScroll(),
+				swing ? later.swing() : earlier.swing(),
+				swing ? later.swingTicks() : earlier.swingTicks(),
+				later.has(UiStateCodec.FLAG_COOLDOWN) ? later.cooldown() : earlier.cooldown());
 	}
 
 	/** Client thread, head of the replayed player's tick. */

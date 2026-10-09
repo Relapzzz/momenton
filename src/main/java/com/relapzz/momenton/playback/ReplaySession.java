@@ -36,6 +36,7 @@ public final class ReplaySession {
 	private final MinecraftClient client;
 	private final ReplayReader reader;
 	private final ReplayMetadata metadata;
+	private final Perspective viewerPerspective;
 
 	private OfflineConnection connection;
 	private ActionCodec.Reader actions;
@@ -52,6 +53,7 @@ public final class ReplaySession {
 		this.client = client;
 		this.reader = reader;
 		this.metadata = reader.metadata();
+		this.viewerPerspective = client.options.getPerspective();
 		load(0);
 		PovDriver.play(reader.frames());
 	}
@@ -200,6 +202,7 @@ public final class ReplaySession {
 		PovDriver.stop();
 		LocalPlayerDriver.reset();
 		UiStateDriver.reset();
+		session.client.options.setPerspective(session.viewerPerspective);
 		// Safe from inside a tick, unlike the disconnect in open: a replay has no integrated server,
 		// so this takes the branch that does not wait on one. Unload before closing the channel, and
 		// only if there is still a world - quitting to title already did it. A closed connection means
@@ -236,6 +239,7 @@ public final class ReplaySession {
 			next = read();
 		}
 		advanceUi(target);
+		UiStateDriver.settle();
 		tick = target;
 		PovDriver.setTick(target);
 		LocalPlayerDriver.snap(client.player);
@@ -264,6 +268,7 @@ public final class ReplaySession {
 		// not carry them, and the recorder rewrites the whole UI state at every chunk boundary so that
 		// this one action is all a seek needs to know it.
 		advanceUi(tick);
+		UiStateDriver.settle();
 
 		// A snapshot describes the world *after* its own tick, so the packets of that tick are already
 		// in it and replaying them would apply the same tick twice. The client-side tracks still have
