@@ -1,6 +1,7 @@
 package com.relapzz.momenton.export;
 
 import com.relapzz.momenton.Momenton;
+import com.relapzz.momenton.audio.LoopbackRenderer;
 import com.relapzz.momenton.format.ReplayMetadata;
 import com.relapzz.momenton.format.ReplayReader;
 import com.relapzz.momenton.mixin.client.export.ChunkRenderingDataPreparerAccessor;
@@ -20,6 +21,8 @@ import org.lwjgl.glfw.GLFW;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.Future;
 
 public final class ExportSession {
@@ -30,6 +33,8 @@ public final class ExportSession {
 	private final MinecraftClient client;
 	private final ExportSettings settings;
 	private final FfmpegProcess ffmpeg;
+	private final Path video;
+	private final LoopbackRenderer audio;
 	private final FrameGrabber grabber;
 	private final int guiScale;
 	private final int frames;
@@ -42,10 +47,13 @@ public final class ExportSession {
 	private RenderTickCounter counter;
 	private IOException failure;
 
-	private ExportSession(MinecraftClient client, ExportSettings settings, ReplayMetadata metadata, int frames, FfmpegProcess ffmpeg) {
+	private ExportSession(MinecraftClient client, ExportSettings settings, ReplayMetadata metadata, int frames, FfmpegProcess ffmpeg,
+			Path video, LoopbackRenderer audio) {
 		this.client = client;
 		this.settings = settings;
 		this.ffmpeg = ffmpeg;
+		this.video = video;
+		this.audio = audio;
 		this.grabber = new FrameGrabber(settings.width(), settings.height());
 		this.guiScale = guiScale(metadata, settings);
 		this.frames = frames;
@@ -84,18 +92,33 @@ public final class ExportSession {
 			return;
 		}
 
+		Path output = settings.output();
+		Path video = output.resolveSibling("momenton-video-" + output.getFileName());
 		FfmpegProcess ffmpeg;
 		try {
-			ffmpeg = FfmpegProcess.start(settings.ffmpeg(), settings.width(), settings.height(), settings.fps(), settings.output());
+			ffmpeg = FfmpegProcess.start(settings.ffmpeg(), settings.width(), settings.height(), settings.fps(), video);
 		} catch (IOException e) {
 			Momenton.LOGGER.error("Could not start FFmpeg", e);
 			report(client, false, "Could not start FFmpeg: " + e.getMessage());
 			return;
 		}
 
+		LoopbackRenderer audio;
+		try {
+			audio = LoopbackRenderer.start(client, output.resolveSibling("momenton-audio-" + output.getFileName() + ".pcm"), settings.fps());
+		} catch (IOException e) {
+			ffmpeg.close();
+			delete(video);
+			Momenton.LOGGER.error("Could not create the audio file", e);
+			report(client, false, "Could not create the audio file: " + e.getMessage());
+			return;
+		}
+
 		ReplaySession.open(client, settings.replay());
 		if (!ReplaySession.isPlaying() || client.player == null) {
 			ffmpeg.close();
+			audio.close();
+			delete(video);
 			report(client, false, "Could not open the replay");
 			return;
 		}
@@ -104,7 +127,7 @@ public final class ExportSession {
 		}
 		ReplaySession.seek(settings.startTick());
 
-		active = new ExportSession(client, settings, metadata, frames, ffmpeg);
+		active = new ExportSession(client, settings, metadata, frames, ffmpeg, video, audio);
 		Window window = client.getWindow();
 		window.setVsync(false);
 		window.setFramebufferWidth(settings.width());
@@ -189,6 +212,7 @@ public final class ExportSession {
 			if (!(client.currentScreen instanceof LevelLoadingScreen) && terrainBuilt()) {
 				ReplaySession.seek(settings.startTick());
 				ReplaySession.togglePause();
+				audio.stopOneShots();
 				settling = false;
 			}
 			return;
@@ -198,6 +222,11 @@ public final class ExportSession {
 		}
 
 		grabber.grab(client.getFramebuffer().getColorAttachment(), this::write);
+		try {
+			audio.render();
+		} catch (IOException e) {
+			failure = e;
+		}
 		frame++;
 		if (failure != null) {
 			fail(failure);
@@ -244,6 +273,7 @@ public final class ExportSession {
 				throw failure;
 			}
 			ffmpeg.finish();
+			FfmpegProcess.mux(settings.ffmpeg(), video, audio.path(), settings.output());
 		} catch (IOException e) {
 			fail(e);
 			return;
@@ -262,6 +292,8 @@ public final class ExportSession {
 		if (!saved) {
 			ffmpeg.close();
 		}
+		audio.close();
+		delete(video);
 
 		Window window = client.getWindow();
 		int[] width = new int[1];
@@ -277,6 +309,14 @@ public final class ExportSession {
 		}
 		Momenton.LOGGER.info("Export ended after {} of {} frames: {}", frame, frames, message);
 		report(client, saved, message);
+	}
+
+	private static void delete(Path path) {
+		try {
+			Files.deleteIfExists(path);
+		} catch (IOException e) {
+			Momenton.LOGGER.warn("Could not delete {}", path, e);
+		}
 	}
 
 	private static void report(MinecraftClient client, boolean saved, String message) {

@@ -1,5 +1,7 @@
 package com.relapzz.momenton.export;
 
+import com.relapzz.momenton.audio.LoopbackRenderer;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
@@ -65,6 +67,25 @@ public final class FfmpegProcess implements AutoCloseable {
 			"-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", output.toString());
 	}
 
+	public static void mux(Path ffmpeg, Path video, Path pcm, Path output) throws IOException {
+		Process process = new ProcessBuilder(ffmpeg.toString(), "-nostdin", "-y", "-i", video.toString(),
+			"-f", "s16le", "-ar", Integer.toString(LoopbackRenderer.SAMPLE_RATE), "-ac", "2", "-i", pcm.toString(),
+			"-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", output.toString())
+			.redirectErrorStream(true)
+			.start();
+		List<String> log = process.inputReader().lines().toList();
+		try {
+			int exit = process.waitFor();
+			if (exit != 0) {
+				throw new IOException("ffmpeg mux exited with code " + exit + ":\n"
+					+ String.join("\n", log.subList(Math.max(0, log.size() - STDERR_LINES), log.size())));
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new InterruptedIOException();
+		}
+	}
+
 	public void writeFrame(ByteBuffer rgba) throws IOException {
 		if (rgba.remaining() != frameBytes) {
 			throw new IllegalArgumentException("Expected " + frameBytes + " bytes, got " + rgba.remaining());
@@ -97,8 +118,8 @@ public final class FfmpegProcess implements AutoCloseable {
 
 	@Override
 	public void close() {
-		process.destroyForcibly();
 		writer.interrupt();
+		process.destroyForcibly().onExit().join();
 	}
 
 	private IOException exited() throws InterruptedException {
