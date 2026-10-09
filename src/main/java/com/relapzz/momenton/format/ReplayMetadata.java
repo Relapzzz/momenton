@@ -28,7 +28,7 @@ public record ReplayMetadata(
 		List<ChunkEntry> chunks,
 		List<DimensionChange> dimensionChanges) {
 
-	public static final int FORMAT_VERSION = 1;
+	public static final int FORMAT_VERSION = 2;
 
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 

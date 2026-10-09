@@ -12,7 +12,8 @@
 		"client.playback.CameraMixin",
 		"client.playback.ClientPlayerEntityMixin",
 		"client.playback.MinecraftClientMixin",
-		"client.playback.MouseMixin"
+		"client.playback.MouseMixin",
+		"client.playback.ScreenCursorMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

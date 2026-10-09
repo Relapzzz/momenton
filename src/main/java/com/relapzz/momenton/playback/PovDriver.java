@@ -67,6 +67,13 @@ public final class PovDriver {
 		return current.sample(tick, tickProgress);
 	}
 
+	@Nullable
+	public static FrameTrack.Pose screenCursor(float tickProgress) {
+		FrameTrack current = track;
+		FrameTrack.Pose pose = current != null && current.normalisedMouse() ? pose(tickProgress) : null;
+		return pose != null && (pose.flags() & FrameTrack.FLAG_SCREEN_OPEN) != 0 ? pose : null;
+	}
+
 	/** The recorded frame flags at the current tick, or -1 when nothing is playing. */
 	public static int flags() {
 		FrameTrack current = track;

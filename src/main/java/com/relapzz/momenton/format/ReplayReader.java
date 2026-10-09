@@ -38,7 +38,7 @@ public final class ReplayReader implements Closeable {
 
 	/** The whole frame track. Fixed stride, so it is an array to index rather than a stream to read. */
 	public FrameTrack frames() throws IOException {
-		return new FrameTrack(read("frames.bin"));
+		return new FrameTrack(read("frames.bin"), metadata.formatVersion());
 	}
 
 	/**

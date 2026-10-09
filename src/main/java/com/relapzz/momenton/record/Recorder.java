@@ -433,8 +433,8 @@ public final class Recorder {
 				pos.x, pos.y, pos.z,
 				camera.getYaw(), camera.getPitch(),
 				((GameRendererInvoker) client.gameRenderer).callGetFov(camera, tickProgress, true),
-				(float) (client.mouse.getX() * window.getScaledWidth() / window.getWidth()),
-				(float) (client.mouse.getY() * window.getScaledHeight() / window.getHeight()),
+				(float) (client.mouse.getX() / window.getWidth()),
+				(float) (client.mouse.getY() / window.getHeight()),
 				frameFlags(client, camera));
 	}
 

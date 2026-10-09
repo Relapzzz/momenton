@@ -30,16 +30,24 @@ public final class FrameTrack {
 	 */
 	public static final int FLAG_FRONT_VIEW = 128;
 
+	public static final int NORMALISED_MOUSE_VERSION = 2;
+
 	private final ByteBuffer data;
 	private final int count;
+	private final boolean normalisedMouse;
 
-	public FrameTrack(byte[] bytes) {
+	public FrameTrack(byte[] bytes, int formatVersion) {
 		this.data = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
 		this.count = bytes.length / STRIDE;
+		this.normalisedMouse = formatVersion >= NORMALISED_MOUSE_VERSION;
 	}
 
 	public int count() {
 		return count;
+	}
+
+	public boolean normalisedMouse() {
+		return normalisedMouse;
 	}
 
 	/** The pose recorded at or just before {@code tick + tickProgress}, or null if the track is empty. */
