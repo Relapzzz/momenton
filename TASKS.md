@@ -171,7 +171,8 @@ Goal: playback of blocks, a chest, item moves, chat typing and a portal looks ri
       `[`, `]` and Esc handled there (Wave 2, Screens; written, unverified)
 - [ ] 9. Cursor stored normalised (format version bump) and fed to screen rendering through a
       `GameRenderer.render` mouse-argument mixin (Wave 2, Cursor; written, unverified)
-- [ ] 10. Portal warp: `nauseaIntensity` in `UI_STATE`. Fire ticks in `LOCAL_PLAYER` (Wave 2, Body state; written, unverified)
+- [ ] 10. Portal warp (`nauseaIntensity`) and fire ticks in `LOCAL_PLAYER`, applied at TAIL of the tick
+      (Wave 2, Body state; written, unverified)
 - [ ] 11. `ENTITY_MOVE` records only the local player and its root vehicle; apply the vehicle pose
       (Wave 2, Body state; written, unverified)
 - [ ] 12. **Gate:** a recording with block breaking and placing, a chest, item moves, chat typing and
