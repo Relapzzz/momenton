@@ -3,8 +3,11 @@ package com.relapzz.momenton.record;
 import com.relapzz.momenton.format.ActionCodec;
 import com.relapzz.momenton.format.UiStateCodec;
 import com.relapzz.momenton.mixin.client.ChatHudAccessor;
+import com.relapzz.momenton.mixin.client.ChatScreenAccessor;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ChatScreen;
+import net.minecraft.client.gui.screen.ingame.CreativeInventoryScreen;
+import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.client.gui.screen.ingame.InventoryScreen;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.util.Hand;
@@ -27,11 +30,13 @@ final class UiStateTracker {
 	private static final int FLAG_CHAT_SCROLL = UiStateCodec.FLAG_CHAT_SCROLL;
 	private static final int FLAG_SWING = UiStateCodec.FLAG_SWING;
 	private static final int FLAG_COOLDOWN = UiStateCodec.FLAG_COOLDOWN;
+	private static final int FLAG_CHAT_DRAFT = UiStateCodec.FLAG_CHAT_DRAFT;
 
 	static final int SCREEN_NONE = UiStateCodec.SCREEN_NONE;
 	static final int SCREEN_OWN_INVENTORY = UiStateCodec.SCREEN_OWN_INVENTORY;
 	static final int SCREEN_CHAT = UiStateCodec.SCREEN_CHAT;
 	static final int SCREEN_OTHER = UiStateCodec.SCREEN_OTHER;
+	static final int SCREEN_CONTAINER = UiStateCodec.SCREEN_CONTAINER;
 
 	private int selectedSlot = -1;
 	private int screen = -1;
@@ -39,6 +44,7 @@ final class UiStateTracker {
 	private int swing = -1;
 	private int swingTicks = -1;
 	private float cooldown = Float.NaN;
+	private String chatDraft;
 
 	/**
 	 * Forgets the last state, so the next capture writes every field.
@@ -53,6 +59,7 @@ final class UiStateTracker {
 		swing = -1;
 		swingTicks = -1;
 		cooldown = Float.NaN;
+		chatDraft = null;
 	}
 
 	/** The payload for this tick, or null if nothing changed. */
@@ -64,6 +71,8 @@ final class UiStateTracker {
 		int currentSwing = (player.handSwinging ? 1 : 0) | (player.preferredHand == Hand.OFF_HAND ? 2 : 0);
 		int currentSwingTicks = player.handSwingTicks;
 		float currentCooldown = player.getAttackCooldownProgress(0.0f);
+		String currentChatDraft = client.currentScreen instanceof ChatScreen chat
+				? ((ChatScreenAccessor) chat).getChatField().getText() : "";
 
 		int flags = 0;
 		if (currentSlot != selectedSlot) {
@@ -80,6 +89,9 @@ final class UiStateTracker {
 		}
 		if (currentCooldown != cooldown) {
 			flags |= FLAG_COOLDOWN;
+		}
+		if (!currentChatDraft.equals(chatDraft)) {
+			flags |= FLAG_CHAT_DRAFT;
 		}
 		if (flags == 0) {
 			return null;
@@ -111,6 +123,10 @@ final class UiStateTracker {
 			cooldown = currentCooldown;
 			out.writeFloat(cooldown);
 		}
+		if ((flags & FLAG_CHAT_DRAFT) != 0) {
+			chatDraft = currentChatDraft;
+			out.writeUTF(chatDraft);
+		}
 
 		return payload.toByteArray();
 	}
@@ -124,6 +140,9 @@ final class UiStateTracker {
 		}
 		if (client.currentScreen instanceof ChatScreen) {
 			return SCREEN_CHAT;
+		}
+		if (client.currentScreen instanceof HandledScreen<?> && !(client.currentScreen instanceof CreativeInventoryScreen)) {
+			return SCREEN_CONTAINER;
 		}
 		return SCREEN_OTHER;
 	}

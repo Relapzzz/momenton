@@ -22,11 +22,13 @@ public final class UiStateCodec {
 	public static final int FLAG_CHAT_SCROLL = 4;
 	public static final int FLAG_SWING = 8;
 	public static final int FLAG_COOLDOWN = 16;
+	public static final int FLAG_CHAT_DRAFT = 32;
 
 	public static final int SCREEN_NONE = 0;
 	public static final int SCREEN_OWN_INVENTORY = 1;
 	public static final int SCREEN_CHAT = 2;
 	public static final int SCREEN_OTHER = 3;
+	public static final int SCREEN_CONTAINER = 4;
 
 	/** Bits of the swing byte. */
 	public static final int SWING_ACTIVE = 1;
@@ -37,7 +39,7 @@ public final class UiStateCodec {
 
 	/** One decoded action. {@code flags} says which of the rest mean anything. */
 	public record State(int flags, int selectedSlot, int screen, int chatScroll, int swing,
-			int swingTicks, float cooldown) {
+			int swingTicks, float cooldown, String chatDraft) {
 
 		public boolean has(int flag) {
 			return (flags & flag) != 0;
@@ -68,6 +70,7 @@ public final class UiStateCodec {
 		}
 
 		float cooldown = (flags & FLAG_COOLDOWN) != 0 ? in.readFloat() : 0.0f;
-		return new State(flags, selectedSlot, screen, chatScroll, swing, swingTicks, cooldown);
+		String chatDraft = (flags & FLAG_CHAT_DRAFT) != 0 ? in.readUTF() : "";
+		return new State(flags, selectedSlot, screen, chatScroll, swing, swingTicks, cooldown, chatDraft);
 	}
 }
