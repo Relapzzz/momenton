@@ -110,14 +110,6 @@ public final class ReplayWriter {
 		deleteStaging();
 	}
 
-	/** Drops the whole recording: closes what is open and removes the staging directory. */
-	public void abort() throws IOException {
-		chunkOut.close();
-		uiOut.close();
-		frameOut.close();
-		deleteStaging();
-	}
-
 	/** Supplies the metadata once the chunk index is final. */
 	public interface MetadataFactory {
 		ReplayMetadata create(List<ReplayMetadata.ChunkEntry> chunks);
