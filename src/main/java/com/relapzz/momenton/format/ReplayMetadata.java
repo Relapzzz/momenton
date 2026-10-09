@@ -26,7 +26,10 @@ public record ReplayMetadata(
 		String worldName,
 		String initialDimension,
 		List<ChunkEntry> chunks,
-		List<DimensionChange> dimensionChanges) {
+		List<DimensionChange> dimensionChanges,
+		Integer framebufferWidth,
+		Integer framebufferHeight,
+		Integer guiScale) {
 
 	public static final int FORMAT_VERSION = 2;
 
