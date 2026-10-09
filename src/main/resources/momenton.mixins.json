@@ -11,6 +11,8 @@
 		"client.GameRendererMixin",
 		"client.playback.CameraMixin",
 		"client.playback.ClientPlayerEntityMixin",
+		"client.playback.ClientPlayerEntityTailMixin",
+		"client.playback.ClientWorldMixin",
 		"client.playback.MinecraftClientMixin",
 		"client.playback.MouseMixin"
 	],

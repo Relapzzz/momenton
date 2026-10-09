@@ -2,6 +2,8 @@ package com.relapzz.momenton.record;
 
 import com.relapzz.momenton.format.ActionCodec;
 import com.relapzz.momenton.format.EntityMoveCodec;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.math.MathHelper;
@@ -10,20 +12,20 @@ import org.jetbrains.annotations.Nullable;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.Map;
-import java.util.WeakHashMap;
 
 /**
- * Emits one {@code ENTITY_MOVE} action per tick covering every entity whose pose changed, the local
- * player included - the packet stream never carries the local player's own movement, so this track is
- * the only record of where the recorded player went.
+ * Emits one {@code ENTITY_MOVE} action per tick covering the local player and its root vehicle, whichever
+ * of them changed pose - the packet stream never carries the local player's own movement, nor that of a
+ * vehicle it controls, so this track is the only record of where the recorded player went.
  *
  * <p>Poses are compared against the last quantised value rather than a threshold, so nothing drifts
  * and unchanged entities cost nothing. Movement that fits in a short is written as a delta; a teleport
  * falls back to absolute doubles. See {@link EntityMoveCodec} for the layout.
  */
 final class EntityPositionTracker {
-	private final Map<Entity, Pose> known = new WeakHashMap<>();
+	private final Map<Entity, Pose> known = new HashMap<>();
 
 	/** The payload for this tick, or null if nothing moved. */
 	@Nullable
@@ -32,10 +34,15 @@ final class EntityPositionTracker {
 		DataOutputStream out = new DataOutputStream(body);
 		int count = 0;
 
-		for (Entity entity : world.getEntities()) {
-			if (writeIfMoved(out, entity)) {
-				count++;
-			}
+		ClientPlayerEntity player = MinecraftClient.getInstance().player;
+		Entity vehicle = player.getRootVehicle();
+		known.keySet().removeIf(entity -> entity != player && entity != vehicle);
+
+		if (writeIfMoved(out, player)) {
+			count++;
+		}
+		if (vehicle != player && writeIfMoved(out, vehicle)) {
+			count++;
 		}
 
 		if (count == 0) {
