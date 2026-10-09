@@ -6,26 +6,42 @@ import com.relapzz.momenton.format.ActionCodec;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+import it.unimi.dsi.fastutil.ints.IntList;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.screen.DeathScreen;
 import net.minecraft.client.network.ClientConfigurationNetworkHandler;
 import net.minecraft.client.network.ClientConnectionState;
 import net.minecraft.client.network.ClientDynamicRegistryType;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.client.world.ClientChunkLoadProgress;
+import net.minecraft.entity.Entity;
 import net.minecraft.network.ClientConnection;
 import net.minecraft.network.NetworkSide;
 import net.minecraft.network.RegistryByteBuf;
 import net.minecraft.network.codec.PacketCodec;
 import net.minecraft.network.listener.ClientPlayPacketListener;
 import net.minecraft.network.packet.Packet;
+import net.minecraft.network.packet.s2c.play.ChunkDataS2CPacket;
+import net.minecraft.network.packet.s2c.play.ChunkLoadDistanceS2CPacket;
+import net.minecraft.network.packet.s2c.play.CommonPlayerSpawnInfo;
+import net.minecraft.network.packet.s2c.play.EntitiesDestroyS2CPacket;
+import net.minecraft.network.packet.s2c.play.GameJoinS2CPacket;
+import net.minecraft.network.packet.s2c.play.PlayerRespawnS2CPacket;
+import net.minecraft.network.packet.s2c.play.UnloadChunkS2CPacket;
 import net.minecraft.network.state.ConfigurationStates;
 import net.minecraft.network.state.PlayStateFactories;
 import net.minecraft.resource.featuretoggle.FeatureFlags;
 import net.minecraft.server.ServerLinks;
+import net.minecraft.util.math.ChunkPos;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -42,12 +58,15 @@ import java.util.Map;
  * recorded rather than being batched to some later frame.
  */
 public final class OfflineConnection {
+	private final MinecraftClient client;
 	private final ClientConnection connection = new ClientConnection(NetworkSide.CLIENTBOUND);
 	private final EmbeddedChannel channel = new EmbeddedChannel(connection);
+	private final LongSet chunks = new LongOpenHashSet();
 
 	private PacketCodec<ByteBuf, Packet<? super ClientPlayPacketListener>> play;
 
 	public OfflineConnection(MinecraftClient client) {
+		this.client = client;
 		channel.attr(Momenton.PLAYBACK).set(Boolean.TRUE);
 		connection.transitionInbound(ConfigurationStates.S2C,
 				new ClientConfigurationNetworkHandler(client, connection, initialState(client)));
@@ -73,15 +92,66 @@ public final class OfflineConnection {
 
 	/** Replays one recorded play packet. */
 	public void apply(byte[] encoded) {
-		channel.writeInbound(play.decode(Unpooled.wrappedBuffer(encoded)));
+		feed(play.decode(Unpooled.wrappedBuffer(encoded)));
 	}
 
 	/** Replays a length-prefixed run of play packets, which is what a snapshot part holds. */
 	public void applySnapshot(byte[] snapshot) throws IOException {
+		List<Packet<? super ClientPlayPacketListener>> packets = new ArrayList<>();
 		InputStream in = new ByteArrayInputStream(snapshot);
 		while (in.available() > 0) {
-			apply(in.readNBytes(ActionCodec.readVarInt(in)));
+			packets.add(play.decode(Unpooled.wrappedBuffer(in.readNBytes(ActionCodec.readVarInt(in)))));
 		}
+		if (client.world != null) {
+			reuseWorld((GameJoinS2CPacket) packets.removeFirst(), packets);
+		}
+		packets.forEach(this::feed);
+	}
+
+	private void reuseWorld(GameJoinS2CPacket join, List<Packet<? super ClientPlayPacketListener>> snapshot) {
+		CommonPlayerSpawnInfo spawn = join.commonPlayerSpawnInfo();
+		if (spawn.dimension() == client.world.getRegistryKey()) {
+			clearWorld(spawn, snapshot);
+		} else {
+			feed(new PlayerRespawnS2CPacket(spawn, PlayerRespawnS2CPacket.KEEP_ALL));
+		}
+		feed(new ChunkLoadDistanceS2CPacket(join.viewDistance()));
+	}
+
+	private void clearWorld(CommonPlayerSpawnInfo spawn, List<Packet<? super ClientPlayPacketListener>> snapshot) {
+		LongSet stale = new LongOpenHashSet(chunks);
+		for (Packet<?> packet : snapshot) {
+			if (packet instanceof ChunkDataS2CPacket chunk) {
+				stale.remove(ChunkPos.toLong(chunk.getChunkX(), chunk.getChunkZ()));
+			}
+		}
+		for (long pos : stale) {
+			feed(new UnloadChunkS2CPacket(new ChunkPos(pos)));
+		}
+
+		IntList entities = new IntArrayList();
+		for (Entity entity : client.world.getEntities()) {
+			if (entity != client.player) {
+				entities.add(entity.getId());
+			}
+		}
+		feed(new EntitiesDestroyS2CPacket(entities));
+
+		client.getSoundManager().stopAll();
+		client.particleManager.clearParticles();
+		client.interactionManager.setGameModes(spawn.gameMode(), spawn.lastGameMode());
+		if (client.currentScreen instanceof DeathScreen) {
+			client.setScreen(null);
+		}
+	}
+
+	private void feed(Packet<? super ClientPlayPacketListener> packet) {
+		if (packet instanceof ChunkDataS2CPacket chunk) {
+			chunks.add(ChunkPos.toLong(chunk.getChunkX(), chunk.getChunkZ()));
+		} else if (packet instanceof UnloadChunkS2CPacket unload) {
+			chunks.remove(unload.pos().toLong());
+		}
+		channel.writeInbound(packet);
 	}
 
 	/**
