@@ -39,6 +39,7 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
@@ -77,6 +78,7 @@ public final class Recorder {
 
 	private final String worldName;
 	private final String initialDimension;
+	private final Path staging;
 	private final Path output;
 	private final long startedAtEpochMs = System.currentTimeMillis();
 
@@ -84,12 +86,14 @@ public final class Recorder {
 	private volatile int tick;
 	private volatile boolean failed;
 	private boolean encodeErrorLogged;
+	private int writtenTicks;
 
 	/** The session join, replayed at the head of every snapshot so a seek rebuilds the world. */
 	private GameJoinS2CPacket join;
 
 	private Recorder(MinecraftClient client, ClientPlayNetworkHandler handler, Path staging, Path output) throws IOException {
 		this.client = client;
+		this.staging = staging;
 		this.output = output;
 		this.codec = PlayStateFactories.S2C.bind(RegistryByteBuf.makeFactory(handler.getRegistryManager())).codec();
 		this.localPlayer = new LocalPlayerWriter(handler.getRegistryManager());
@@ -140,6 +144,17 @@ public final class Recorder {
 		Recorder recorder = active;
 		if (recorder != null) {
 			recorder.capture(packet);
+		}
+	}
+
+	public static void synthesise(Packet<?> packet) {
+		Recorder recorder = active;
+		if (recorder == null || recorder.state != State.RECORDING) {
+			return;
+		}
+		byte[] encoded = recorder.encode(packet);
+		if (encoded != null) {
+			recorder.pending.add(new Pending(recorder.tick, ActionCodec.PACKET, encoded));
 		}
 	}
 
@@ -218,9 +233,12 @@ public final class Recorder {
 	 * that part needs no world at all - by then every packet holds its own copy of the data.
 	 */
 	private void snapshot(MinecraftClient client, int index) {
+		long started = System.nanoTime();
 		List<Packet<?>> packets = new ArrayList<>();
 		packets.add(rejoin(client, join));
 		packets.addAll(WorldSnapshot.capture(client));
+		Momenton.LOGGER.info("Snapshot {} took {} ms on the client thread, {} packets",
+				index, (System.nanoTime() - started) / 1_000_000, packets.size());
 
 		io.execute(() -> {
 			if (failed) {
@@ -301,13 +319,12 @@ public final class Recorder {
 			return;
 		}
 
-		int at = tick;
 		String dimension = dimensionOf(filtered);
+		byte[] encoded = encode(filtered);
+		int at = tick;
 		if (dimension != null) {
 			pending.add(new Pending(at, ActionCodec.DIMENSION_CHANGE, dimension.getBytes(StandardCharsets.UTF_8)));
 		}
-
-		byte[] encoded = encode(filtered);
 		if (encoded != null) {
 			pending.add(new Pending(at, ActionCodec.PACKET, encoded));
 		}
@@ -358,6 +375,13 @@ public final class Recorder {
 
 		int at = tick;
 		if (at % ReplayWriter.CHUNK_TICKS == 0) {
+			tick = at + 1;
+			client.getPacketApplyBatcher().apply();
+			if (client.world == null || client.player == null) {
+				tick = at;
+				finish();
+				return;
+			}
 			snapshot(client, at / ReplayWriter.CHUNK_TICKS);
 
 			// A snapshot makes the world independently rebuildable; these make the tracks that follow
@@ -387,7 +411,7 @@ public final class Recorder {
 			throw new IllegalStateException("Failed to build a tick action", e);
 		}
 
-		submitBatch(at);
+		submitBatch(at, at);
 		tick = at + 1;
 	}
 
@@ -433,14 +457,19 @@ public final class Recorder {
 	}
 
 	/**
-	 * Drains everything the netty thread has queued and hands it to the writer as one ordered batch
-	 * for tick {@code at}. No action in a batch may be stamped later than the batch itself, which is
-	 * what keeps every action inside the {@code [startTick, endTick)} range its chunk advertises.
+	 * Takes every queued action stamped up to {@code upTo} and hands it to the writer as one ordered
+	 * batch for tick {@code at}; later ones stay queued for their own tick. No action in a batch may be
+	 * stamped later than the batch itself, which is what keeps every action inside the
+	 * {@code [startTick, endTick)} range its chunk advertises.
 	 */
-	private void submitBatch(int at) {
+	private void submitBatch(int at, int upTo) {
 		List<Pending> batch = new ArrayList<>();
-		for (Pending action = pending.poll(); action != null; action = pending.poll()) {
-			batch.add(action.tick() <= at ? action : new Pending(at, action.type(), action.payload()));
+		for (Iterator<Pending> it = pending.iterator(); it.hasNext(); ) {
+			Pending action = it.next();
+			if (action.tick() <= upTo) {
+				it.remove();
+				batch.add(action.tick() <= at ? action : new Pending(at, action.type(), action.payload()));
+			}
 		}
 		io.execute(() -> writeBatch(at, batch));
 	}
@@ -458,6 +487,7 @@ public final class Recorder {
 				}
 				writer.write(action.tick(), action.type(), action.payload());
 			}
+			writtenTicks = at + 1;
 		} catch (IOException e) {
 			failed = true;
 			Momenton.LOGGER.error("Recording failed while writing", e);
@@ -473,22 +503,20 @@ public final class Recorder {
 		// Packets keep arriving between the last recorded tick and the keypress. They belong to the
 		// last tick, not to a tick that never happened - otherwise the final chunk holds an action
 		// outside the [startTick, endTick) range its own index advertises.
-		int durationTicks = tick;
-		submitBatch(Math.max(0, durationTicks - 1));
+		submitBatch(Math.max(0, tick - 1), Integer.MAX_VALUE);
 		long framesRendered = frames.framesWritten();
-		boolean aborted = failed;
 
 		io.execute(() -> {
+			int durationTicks = writtenTicks;
+			if (failed) {
+				Momenton.LOGGER.warn("Finalising the recording from the {} ticks written before it failed", durationTicks);
+			}
 			try {
-				if (aborted) {
-					writer.abort();
-				} else {
-					writer.finish(durationTicks, chunks -> metadata(durationTicks, framesRendered, chunks), output);
-					Momenton.LOGGER.info("Recorded {} ticks and {} frames to {}", durationTicks, framesRendered, output);
-					client.execute(() -> notify(client, "Recording saved: " + output.getFileName()));
-				}
+				writer.finish(durationTicks, chunks -> metadata(durationTicks, framesRendered, chunks), output);
+				Momenton.LOGGER.info("Recorded {} ticks and {} frames to {}", durationTicks, framesRendered, output);
+				client.execute(() -> notify(client, "Recording saved: " + output.getFileName()));
 			} catch (IOException e) {
-				Momenton.LOGGER.error("Could not finalise the recording", e);
+				Momenton.LOGGER.error("Could not finalise the recording, its parts are left in {}", staging, e);
 			}
 		});
 		io.shutdown();
