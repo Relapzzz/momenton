@@ -54,10 +54,11 @@ frames are interpolated between two ticks. `RenderTickCounter` drives that, and 
 `getTickProgress(boolean)`, `getDynamicDeltaTicks()`, `getFixedDeltaTicks()`, plus the
 `RenderTickCounter.Constant` and `.Dynamic` implementations.
 
-During export we build a `RenderTickCounter.Constant` per output frame carrying an exact fractional
-tick progress (its constructor is package-private, so an access widener opens it). Entity motion,
-item swing, view bobbing and hurt tilt then interpolate exactly as they do live. Rendering 60 fps out
-of 20 TPS data is precisely what the game does every frame anyway.
+During export each output frame gets its own `RenderTickCounter` carrying an exact fractional tick
+progress and a delta of `20 / fps` ticks - a small record in `ExportSession`, because
+`RenderTickCounter.Constant` returns one value from all three getters and so cannot carry both.
+Entity motion, item swing, view bobbing and hurt tilt then interpolate exactly as they do live.
+Rendering 60 fps out of 20 TPS data is precisely what the game does every frame anyway.
 
 ### 2. Fidelity: the local camera must be recorded at frame rate
 
@@ -116,7 +117,7 @@ A zip, so each part stays independently seekable and inspectable:
 ```
 recording.momenton (zip)
   metadata.json      version, MC/mod version, duration, world name, chunk index, dimension changes,
-                     recording window size and GUI scale
+                     framebufferWidth/Height and guiScale at record start (null in older files)
   setup.bin          the configuration-phase packets and the game join, replayed before tick 0
   chunk_0000.bin     length-prefixed actions: [varint type][varint tickDelta][payload]
   snapshot_0000.bin  full world state at that chunk boundary
@@ -279,17 +280,22 @@ other packet. The cases:
 - **Crack overlay:** `setBlockBreakingInfo` for the local player's own id is local. Synthesise
   `BlockDestructionS2CPacket`.
 - **Local sounds** (place, mining hits, eating and other self-sounds): synthesise
-  `PlaySoundS2CPacket`, captured from `ClientWorld.playSound` where the source is the local player.
-  Calls made from inside `ClientPlayNetworkHandler` handlers (`onPlaySound`, `onWorldEvent`,
-  `onBlockBreakingProgress`) are excluded with a flag set around them, or every real sound would be
-  recorded twice.
+  `PlaySoundS2CPacket` (or `PlaySoundFromEntityS2CPacket`), captured from `ClientWorld.playSound` and
+  `playSoundFromEntity` where the source is the local player. Eating and footsteps go through the
+  `ClientPlayerEntity.playSound(SoundEvent, float, float)` override instead, and the mining hit sound
+  is a `PositionedSoundInstance` handed straight to `SoundManager.play` in
+  `ClientPlayerInteractionManager.updateBlockBreakingProgress` (captured at its construction), so
+  each has its own hook. Anything run while a packet is being applied is excluded, or every real sound
+  would be recorded twice: a counter wraps `PacketApplyBatcher$Entry.apply` for client play
+  listeners, because any handler can reach these paths, not only the three obvious ones.
 - **Screen contents:** `ClickSlotC2SPacket` carries the client's predicted result and the server only
   sends a correction when it disagrees, so item moves in a chest, crafting table or the player's
   inventory never appear clientbound. At the end of each tick, if `player.currentScreenHandler`'s
   stacks or cursor changed, write `InventoryS2CPacket(syncId, revision, stacks, cursor)`.
 
-One recording-side mixin on `ClientWorld` covers the first three. Verify the targets against
-`genSources` before writing it.
+`record/LocalPrediction` holds the logic; the mixins (`ClientWorldMixin`, `ClientPlayerSoundMixin`,
+`ClientPlayerInteractionManagerMixin`, `PacketApplyBatcherEntryMixin`) are one static call each.
+Screen contents are `record/ScreenTracker`, run from the client tick.
 
 ### HUD and GUI: what is free, and what must be recorded
 
@@ -342,34 +348,56 @@ not reproduce. Lunar Client Rewind has the same limitation.
 
 ### Export
 
-`export/ExportSession` takes over the frame loop. Per output frame at time `t`:
+`export/ExportSession` does not own a loop. **Each vanilla `MinecraftClient.render` pass is one
+output frame**, and export changes only what that pass is fed, through `ExportClientMixin`. The
+contract is `ExportSettings(replay, startTick, endTick, width, height, fps, output, ffmpeg,
+drawCursor)`, built by `ui/ExportScreen`.
 
-1. **Clock.** Call `client.tick()` until the replay reaches `floor(t * 20)`. Driving the real client
-   tick also drives `GameRenderer.tick`, which eases the camera's eye height; a loop that skips it
-   freezes `cameraY` and every crouch exports at the wrong height.
-2. **Render** with a fixed tick progress `t * 20 - floor(t * 20)`, through a `RenderTickCounter.Constant`
-   (access widener on its constructor).
-3. **Wait for the chunk builder to be idle** before grabbing. Chunk meshes build asynchronously, so
-   without the wait a frame after a seek, or wherever chunks stream in, has holes.
-4. **Resolution.** Resize the main framebuffer, with a mixin overriding the `Window` framebuffer size,
-   because vanilla world rendering assumes the main target.
-5. **GUI scale.** Choose the GUI scale so the HUD keeps its recorded size relative to the frame.
-   Metadata stores the recording's window size and GUI scale for this.
-6. **Readback** (`FrameGrabber`). Prove the path with `ScreenshotRecorder.takeScreenshot` first, then
-   optimise: a `GpuBuffer` with `USAGE_COPY_DST | USAGE_MAP_READ`, `copyTextureToBuffer`, then
-   `mapBuffer`, rotating two or three buffers with `createFence()` so readback does not stall the loop.
-7. **Encode** (`FfmpegProcess`). FFmpeg from PATH or a configured path, `libx264`, raw frames on stdin
-   written from a dedicated thread, stderr always drained so the pipe never deadlocks.
+1. **Start.** Read the metadata, start ffmpeg, open the replay paused and seek to `startTick`, turn
+   vsync off, set the export resolution. The session then *settles*: it runs normally until the
+   loading screen is gone and the terrain is built, seeks to `startTick` again and unpauses.
+2. **Clock.** The `beginRenderTick` result in `render` is replaced, so ticks come from the replay
+   instead of the wall clock. Frame `n` targets tick `startTick + floor(n * 20 / fps)` and asks for
+   as many ticks as reach `target + 1` (a seek leaves the current tick where it was, see `jump`).
+   Driving the real client tick also drives `GameRenderer.tick`, which eases the camera's eye height;
+   a loop that skipped it would freeze `cameraY` and export every crouch at the wrong height.
+3. **Render** with a fixed tick progress `(n * 20 mod fps) / fps` and delta `20 / fps`, through a
+   custom `RenderTickCounter` record passed to `GameRenderer.render` and returned by
+   `getRenderTickCounter`. No access widener: `RenderTickCounter.Constant` cannot be used (see the
+   three things, 1).
+4. **Grab only when the world is fully built**, after `GameRenderer.render`. A pass that is not ready
+   is simply rendered again with the same tick and counter. Ready means all of:
+   `WorldRenderer.isTerrainRenderComplete()`, every `BlockBufferBuilderPool` builder free (the pool's
+   capacity is captured by `BlockBufferBuilderPoolMixin`), and the occlusion graph settled
+   (`ChunkRenderingDataPreparer`: no terrain update scheduled or running, `needsUpdate` clear). The
+   idea is ReplayMod's `Mixin_BlockOnChunkRebuilds`; Momenton waits by re-rendering instead of blocking.
+5. **Resolution.** `Window.setFramebufferWidth/Height` then `MinecraftClient.onResolutionChanged`,
+   the way vanilla `takePanorama` does it, so world and GUI both render at the export size into the
+   main target. `ExportWindowMixin` cancels `onFramebufferSizeChanged` during export so a window
+   resize cannot undo it. At the end the real GLFW framebuffer size and vsync are restored.
+6. **GUI scale** = `round(recordedGuiScale * min(width / recordedWidth, height / recordedHeight))`,
+   at least 1, injected into `onResolutionChanged`'s `calculateScaleFactor` call. Recordings from
+   before Wave 3 have null `framebufferWidth/Height` and `guiScale`, and keep the viewer's scale.
+7. **Readback** (`FrameGrabber`). Three rotating `GpuBuffer`s with `USAGE_MAP_READ | USAGE_COPY_DST`;
+   each grab is `copyTextureToBuffer` plus its own `createFence()`, mirroring vanilla's
+   `MappableRingBuffer`, and a slot is mapped only when it comes round again (or at `flush`). Rows
+   are flipped to top-down, as `ScreenshotRecorder` does.
+8. **Encode** (`FfmpegProcess`). FFmpeg from `-Dmomenton.ffmpeg`, then PATH, or the path typed in the
+   export screen. Raw RGBA on stdin from a writer thread through a queue bounded at three frames,
+   `libx264 -preset medium -crf 18 -pix_fmt yuv420p`; stderr is drained and its last 50 lines go into
+   any error.
+9. **Around the frame.** Vsync off and the inactivity fps limit lifted; the pause menu never opens on
+   focus loss; toasts are not drawn; keyboard input is cancelled except Esc, which cancels the export;
+   the cursor sprite `textures/gui/cursor.png` is drawn after the screen when enabled. At the end the
+   replay is left paused on the last frame and a toast reports the result.
 
 ```
-ffmpeg -f rawvideo -pix_fmt bgra -s WxH -r <fps> -i pipe:0 \
-       -i game.pcm -i mic.wav \
-       -c:v libx264 -pix_fmt yuv420p \
-       -filter_complex "[1:a][2:a]amix=inputs=2" out.mp4
+ffmpeg -y -f rawvideo -pix_fmt rgba -s WxH -r <fps> -i pipe:0 \
+       -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p out.mp4
 ```
 
-No frame composition logic belongs in the export package. Export is the playback view on a fixed
-clock plus a readback.
+Game audio and the mic join this command as extra inputs in Phases 5 and 7. No frame composition
+logic belongs in the export package. Export is the playback view on a fixed clock plus a readback.
 
 ### Audio: why game sound is rendered at export
 
@@ -421,7 +449,8 @@ Checked against the Yarn 1.21.11 javadocs rather than recalled:
 - `net.minecraft.client.gui.screen.Screen.render(DrawContext, int mouseX, int mouseY, float deltaTicks)`
   and `renderWithTooltip(...)` with the same signature.
 - `net.minecraft.client.render.RenderTickCounter` - `getTickProgress(boolean)`,
-  `getDynamicDeltaTicks()`, `getFixedDeltaTicks()`, `RenderTickCounter.Constant`, `.Dynamic`.
+  `getDynamicDeltaTicks()`, `getFixedDeltaTicks()`, `RenderTickCounter.Constant`, `.Dynamic`. It is an
+  interface, so export implements it directly.
 - `net.minecraft.client.sound.SoundEngine.init(String, boolean)`, `getSoundDevices()`,
   `getCurrentDeviceName()`, `updateDeviceSpecifier()`.
 - `net.minecraft.network.state.PlayStateFactories` / `NetworkState` / `NetworkStateBuilder`.
@@ -475,12 +504,18 @@ these are about *order inside a method*, which javadocs do not carry:
 - `MinecraftClient.render` calls `PacketApplyBatcher.apply()` before `tick()`, which is the cause of
   the snapshot-boundary race.
 
-Three members needed accessors because they are private or package-private:
+Members that needed accessors because they are private:
 
-- `GameRenderer.getFov(Camera, float, boolean)` is **private** - `GameRendererInvoker`.
-- `ChatHud.scrolledLines` is **private** - `ChatHudAccessor`.
-- `RenderTickCounter.Constant(float)` has a **package-private constructor** - export opens it with an
-  access widener.
+- `GameRenderer.getFov(Camera, float, boolean)` - `GameRendererInvoker`.
+- `ChatHud.scrolledLines` - `ChatHudAccessor`.
+- `ChatScreen.chatField`, `TextFieldWidget.editableColor` - `ChatScreenAccessor`,
+  `TextFieldWidgetAccessor` (replayed chat).
+- `ChunkRenderingDataPreparer.terrainUpdateScheduled`, `terrainUpdateFuture`, `needsUpdate` -
+  `ChunkRenderingDataPreparerAccessor` (export chunk wait). `BlockBufferBuilderPool` keeps no
+  capacity field, so `BlockBufferBuilderPoolMixin` records the list size at construction.
+
+`RenderTickCounter.Constant(float)` has a package-private constructor, but export does not need it
+(see Export), so there is no access widener.
 
 Also note `WorldRenderContext` in fabric-rendering-v1 16.2.10 no longer exposes `camera()` or
 `tickCounter()`; the frame track hooks `GameRenderer.render` at TAIL and reads
@@ -510,7 +545,9 @@ New code carries no comments, so borrowed code is tracked here instead: one line
 naming the ReplayMod source it came from, so the next session knows which parts are ours when
 something breaks.
 
-- (none yet)
+- `export/ExportSession` chunk wait: the idea of ReplayMod's `Mixin_BlockOnChunkRebuilds` (do not
+  grab a frame until chunk rebuilds are done). The idea only; no code was copied, and the conditions
+  are 1.21.11's own (see Export, step 4).
 
 ---
 
@@ -630,9 +667,11 @@ portal plays back right, checked visually. Record once on a local `runServer` se
 
 ### Phase 4 - Export (video)
 
-`export/ExportSession.java`, `export/FrameGrabber.java`, `export/FfmpegProcess.java`, an access
-widener for `RenderTickCounter.Constant`, a `Window` framebuffer-size mixin, and an export options
-screen in the replay browser (whole recording, resolution, fps, output). See the Export section.
+`export/ExportSettings.java`, `ExportSession.java`, `FrameGrabber.java`, `FfmpegProcess.java`,
+`ChunkBufferPool.java`, `mixin/client/export/*` (client render, game renderer, keyboard, window,
+block buffer pool, chunk graph accessor), `ui/ExportScreen.java` reached from an Export button in the
+replay browser (size, fps, tick range, output, ffmpeg path, cursor toggle), and the cursor sprite
+`assets/momenton/textures/gui/cursor.png`. See the Export section.
 
 **Done when:** 30 seconds exports to 1080p60, plays in VLC, and matches a side-by-side OBS capture of
 the same session (camera motion, HUD and screens). Run once under VulkanMod 0.6.3 to prove the
@@ -650,13 +689,20 @@ exactly the samples for each frame, muxed by ffmpeg.
 `edit/Project.java`, `edit/Clip.java`, `edit/Timeline.java`, `edit/TimelineResolver.java`,
 `edit/UndoStack.java`, a timeline overlay screen, `mixin/client/hud/InGameHudMixin.java`
 
-`edit/` is pure data with JUnit tests. `TimelineResolver` maps a timeline position to
-`(clip, sourceReplayTick, tickProgress)` and is the one implementation used by preview and export.
+`edit/` is pure data with JUnit tests (written in Wave 3). `Clip` is a `[startTick, endTick)` source
+range; `Timeline` is immutable, and `split`, `trimStart`, `trimEnd`, `move` and `delete` each return a
+new one. `TimelineResolver` maps timeline seconds to `(clipIndex, sourceTick, tickProgress)`, and a
+time exactly on a cut belongs to the next clip; it is the one implementation used by preview and
+export, and `exportRanges()` gives the clips in order. `UndoStack` stores previous timelines (an
+edit that changes nothing is not pushed). `Project` saves the replay's file name and timeline as
+`<replay>.momenton.json` beside the recording.
+
 The timeline is an overlay on the playback view (trim, split, reorder, undo) and export hides it.
 Seeking across a cut is the expensive case: keep the `ReplaySession` warm and only re-seek when the
 resolved clip changes. Backward seeks must no longer show the loading screen, so playback reuses the
-existing `ClientWorld`. HUD toggles gate the per-element `InGameHud` methods. The edit exports through
-the same `ExportSession`.
+existing `ClientWorld`. HUD toggles gate the per-element `InGameHud` methods. Overlay, HUD toggles and
+the loading-screen-free seek are Wave 4. Exporting the edited sequence (several ranges through the
+same `ExportSession`, which today takes one `startTick`/`endTick` range) moves to Wave 5.
 
 **Done when:** you can split a replay into three clips, reorder them, trim two, undo it all, reload
 from disk, and play the result back as continuous video that honours the edited order, with HUD
@@ -693,6 +739,14 @@ After each wave the coordinator merges the branches in a fixed order (Docs last,
 landed), runs `build` and `checkReplay`, and the user does one in-game pass with numbered steps. A
 failure becomes a root-cause fix before the next wave starts.
 
+**Contract stubs.** When agents in one wave depend on each other's classes, the coordinator first
+commits stub classes with the fixed public signatures (bodies empty or throwing), then launches the
+agents on top of that commit. Each agent fills in its own stubs and codes against the others', so
+the branches compile alone and merge without signature conflicts. In Wave 3 the stubs were
+`ExportSettings`, `ExportSession`, `FrameGrabber` and `FfmpegProcess` (commit `51b3fca`).
+`ExportSettings` is the export contract: the export screen builds it and `ExportSession` consumes it,
+so a new export option is a new record component first.
+
 **Wave 0 (coordinator, serial):** `git init` with `run/` and `build/` ignored, a baseline commit, then
 remove the imgui dependencies and commit.
 
@@ -714,16 +768,18 @@ remove the imgui dependencies and commit.
 | Cursor | Task 9 | `FrameTrack`, `FrameTrackWriter`, `Recorder.recordFrame`, `ReplayMetadata` (version bump), new `GameRenderer` mouse mixin |
 | Body state | Tasks 10, 11 | `EntityPositionTracker`, `LocalPlayerWriter`/`Codec`, `LocalPlayerDriver`, `EntityMoveCodec` |
 
-**Wave 3 (3 agents, after Wave 2 is merged): export and the editor data model**
+**Wave 3 (merged): export and the editor data model.** The coordinator committed the contract stubs
+and the export screen first, then three agents:
 
 | Agent | Task | Owns |
 |---|---|---|
-| Pipeline | `FfmpegProcess`, `FrameGrabber` | new files only |
-| Export loop | `ExportSession`, access widener, Window framebuffer-size mixin, metadata window size and GUI scale, export screen in the browser | the new export files, `ReplayBrowserScreen` |
-| Edit model | `edit/*` pure data with JUnit | `edit/`, `src/test/` |
+| Pipeline | `FfmpegProcess`, `FrameGrabber` | those two files, `FfmpegProcessTest` |
+| Export loop | `ExportSession`, export mixins, metadata framebuffer size and GUI scale, cursor sprite | `export/` rest, `mixin/client/export/`, `Recorder` metadata |
+| Edit model | `edit/*` pure data with JUnit | `edit/`, `src/test/.../edit/` |
 
-**Wave 4 (2 agents):** game audio loopback, and the editor timeline overlay with HUD toggles.
-**Wave 5:** mic commentary, then hardening.
+**Wave 4 (running):** game audio loopback in export; the editor timeline overlay with HUD toggles;
+backward seek without the loading screen.
+**Wave 5:** export the edited sequence (several ranges), mic commentary, then hardening.
 
 ---
 
@@ -731,10 +787,10 @@ remove the imgui dependencies and commit.
 
 | Risk | Mitigation |
 |---|---|
-| VulkanMod's `GpuDevice` misses a readback path | `ScreenshotRecorder` first; the Export gate runs once under VulkanMod 0.6.3 |
-| Exported frames have holes from async chunk builds | Export waits for the chunk builder to be idle before grabbing each frame |
+| VulkanMod's `GpuDevice` misses a readback path | Readback uses only the path vanilla screenshots use (`copyTextureToBuffer` + `mapBuffer`); the Export gate runs once under VulkanMod 0.6.3 |
+| Exported frames have holes from async chunk builds | Export re-renders until terrain, block buffer pool and occlusion graph are all settled before grabbing (no cap yet) |
 | HUD is the wrong size at a different export resolution | GUI-scale rule: metadata stores the recording's window size and GUI scale, export picks the scale that keeps the HUD's relative size |
-| Exported motion feels subtly wrong | `frames.bin` at render-frame rate plus `RenderTickCounter.Constant`; validated against a side-by-side OBS capture at the Export gate |
+| Exported motion feels subtly wrong | `frames.bin` at render-frame rate plus a fixed per-frame `RenderTickCounter`; validated against a side-by-side OBS capture at the Export gate |
 | Preview and export disagree | Prevented structurally: both are vanilla `GameRenderer.render` over the same playback, and one `TimelineResolver` |
 | Preview scrubbing stutters across cuts | Keep the `ReplaySession` warm, re-seek only when the resolved clip changes, no loading screen on backward seeks |
 | Client-side UI state missed, HUD looks wrong | The Phase 3 visual gate and the Export OBS comparison are the detectors; extend `UI_STATE` as gaps surface |
@@ -784,6 +840,8 @@ Rules discovered while building. Each one cost a failed run or a wrong fix; do n
   `PlayStateFactories` from 0, including the interleaved `CommonPackets`, `CookiePackets` and
   `PingPackets` (139 ids in +build.6). Skipping them shifts every id above 23.
 - No `contact` block in `fabric.mod.json`; there is no repository URL to point at.
+- Agents that depend on each other in one wave build against committed contract stubs (see Parallel
+  development); Wave 3's three branches merged without a signature conflict.
 
 **Recording**
 - State that existed before F9 is missing from a recording unless captured: the registry manager
@@ -846,3 +904,30 @@ Rules discovered while building. Each one cost a failed run or a wrong fix; do n
   velocity.
 - The camera is not the player: third-person front records `(yaw + 180, -pitch)`, and the perspective
   has three values, not two.
+- Nausea and fire ticks go on at TAIL of the player tick (`ClientPlayerEntityTailMixin`):
+  `tickNausea` copies `lastNauseaIntensity` from the current value during the tick, and `baseTick`
+  extinguishes a client entity every tick, so a value set at HEAD is copied or cleared before it renders.
+- A controlled vehicle's pose is set immediately before and after its own `entity.tick()` inside
+  `ClientWorld.tickEntity` (`playback/ClientWorldMixin`), so vanilla's own vehicle movement cannot move
+  it. The rider is not positioned while riding; `updatePassengerPosition` places it.
+
+**Local prediction**
+- The duplicate guard is a counter around `PacketApplyBatcher$Entry.apply` for client play listeners,
+  not a flag per handler: any handler can reach the hooked sound and world-event paths.
+- Not every local sound goes through `ClientWorld.playSound`. Eating and footsteps use the
+  `ClientPlayerEntity.playSound` override; the mining hit sound is handed straight to `SoundManager.play`
+  in `updateBlockBreakingProgress`. Each needs its own hook.
+
+**Export**
+- `RenderTickCounter.Constant` returns the same value from all three getters, so it cannot carry a
+  tick progress and a frame delta at once. A small record implementing the interface needs no access
+  widener.
+- Do not write an export loop. Let vanilla `render` run and feed it: replace the `beginRenderTick`
+  result with the replay's tick count, pass a fixed counter to `GameRenderer.render`, and grab after
+  it. A pass that is not ready is just rendered again.
+- "Terrain render complete" is not enough to grab: also wait for every block buffer builder to be
+  back in the pool and for the occlusion graph update to finish, or a frame still has holes.
+- Resize like vanilla `takePanorama` (`setFramebufferWidth/Height` + `onResolutionChanged`) and cancel
+  window resize events, rather than a separate render target.
+- A text colour with zero alpha draws nothing on 1.21.11; write colours as `0xFFRRGGBB` (the browser's
+  title and empty message were invisible until Wave 3).
