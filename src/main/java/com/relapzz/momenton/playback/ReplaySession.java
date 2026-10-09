@@ -219,16 +219,10 @@ public final class ReplaySession {
 	 * Rebuilds the world at the snapshot covering {@code target}, then replays forward to it without
 	 * waiting for client ticks.
 	 *
-	 * <p>Rebuilding means a fresh connection: the snapshot leads with a join packet, and letting
-	 * vanilla build a new {@code ClientWorld} is both simpler and more correct than unpicking the old
-	 * one. The cost is that the join drops the viewer on the terrain-loading screen for a moment.
-	 *
-	 * <p>So a short forward seek does not rebuild at all. Replaying forward is what the tick loop
-	 * already does; running it without waiting for ticks keeps the world that is already loaded and
-	 * skips the screen entirely. Only a backward seek genuinely needs a snapshot - packets cannot be
-	 * un-applied - and only a far-forward one is worth one, where replaying would cost more than
-	 * rebuilding. One chunk's worth of ticks is that boundary, since that is the most a rebuild ever
-	 * has to replay.
+	 * <p>A short forward seek does not rebuild at all. Replaying forward is what the tick loop already
+	 * does. Only a backward seek genuinely needs a snapshot - packets cannot be un-applied - and only a
+	 * far-forward one is worth one, where replaying would cost more than rebuilding. One chunk's worth
+	 * of ticks is that boundary, since that is the most a rebuild ever has to replay.
 	 */
 	private void jump(int target) throws IOException {
 		if (target < tick || target - tick > metadata.chunkTicks()) {
@@ -247,14 +241,12 @@ public final class ReplaySession {
 
 	/** Loads snapshot {@code index} and positions the action cursor just after it. */
 	private void load(int index) throws IOException {
-		if (connection != null) {
-			connection.close();
-		}
-
 		LocalPlayerDriver.reset();
 		UiStateDriver.reset();
-		connection = new OfflineConnection(client);
-		connection.applySetup(reader.setup());
+		if (connection == null) {
+			connection = new OfflineConnection(client);
+			connection.applySetup(reader.setup());
+		}
 		connection.applySnapshot(reader.snapshot(index));
 
 		chunkIndex = index;
