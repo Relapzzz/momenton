@@ -30,7 +30,10 @@ in **Not yet verified**.
   and follows hotbar and chat scroll. Tasks 1-12 below are the rest.
 - Git repository on `main`. Wave 0 and Wave 1 are merged: imgui removed, tools on Gradle, seek
   state merge, perspective restore, snapshot-boundary race fix, snapshot timing log, finalise on
-  write failure, `Recorder.synthesise`. All of Wave 1 is written and unobserved in game.
+  write failure, `Recorder.synthesise`. Wave 2 is merged too: local prediction as synthesised
+  packets, screen contents/state/chat draft and viewer-input blocking, normalised cursor (format
+  version 2), portal warp, fire ticks, vehicle pose. Waves 1 and 2 are written and unobserved in game.
+  17 client mixins; the first launch is itself a check (`defaultRequire = 1`).
 - Decisions: the editor uses vanilla Screens and ImGui is dropped; export comes before the editor;
   existing comments stay, new code adds none.
 - Recordings in `run/momenton/recordings/`:
@@ -73,6 +76,15 @@ in **Not yet verified**.
   chunk borders around ticks 500, 1000 and 1500.
 - **Snapshot timing** (task 4): read the `Snapshot N took X ms` lines in `run/logs/latest.log`.
 - **Finalise on write failure** (task 4): untested; needs a forced write failure.
+- **Local prediction** (task 5): break/place particles and sounds, mining crack and hit sound, eating,
+  footsteps and door events are recorded as packets. Duplicate guard: a counter around
+  `PacketApplyBatcher$Entry.apply` for client play listeners. Check nothing plays twice.
+- **Screens** (tasks 6-8): inventory, chest and chat open and close on time with recorded contents and
+  draft; clicks and typing on replayed screens do nothing; `P` `[` `]` F10 work over them.
+- **Cursor** (task 9): new recordings are format version 2; replayed screens follow the recorded cursor
+  at any window size or GUI scale; version 1 recordings play as before.
+- **Portal warp, fire overlay, vehicles** (tasks 10-11): warp builds up, fire starts on the lava tick,
+  boat and horse carry the rider along the recorded path, no jump on remount.
 
 ## Known issues
 
@@ -85,7 +97,8 @@ in **Not yet verified**.
 - Render distance is a capture-time decision; a replay never holds more world than was sent.
 - View bobbing on a driven player is unchecked (its velocity is zeroed each tick). Check at export.
 - Sprinting is recorded (`FLAG_SPRINTING`) but not applied; FOV is already in `frames.bin`.
-- The driven player never calls `Entity.move`: no footsteps, no sprint particles, never `onGround`.
+- The driven player never calls `Entity.move`: no sprint particles, never `onGround` (footsteps now come
+  from recorded packets, task 5).
 - The tab list is not in the snapshot (`Ignoring player info update for unknown player`).
 - Snapshot capture blocks the client thread every 500 ticks, not only at F9. Now logged; read the numbers.
 - `ClientWorld.shouldTickTimeOfDay` is private, so a snapshot always says time advances (up to 1 s drift).
@@ -98,14 +111,16 @@ in **Not yet verified**.
   `apply()` is in the snapshot and replayed again (harmless for chunks and blocks, a relative entity
   move applies twice until the next position sync). Closing both needs the stamp and the queuing to be
   atomic in `ClientConnectionMixin`.
-- **Container inventory moves are not recorded;** clicks are client-predicted and the server only
-  corrects disagreements (task 6).
-- **Containers never close in a replay;** closing is client-initiated and nothing applies it (task 7).
-- **Chat draft text is not recorded** (task 7).
-- **Replayed screens take the viewer's input:** clicks move items, Esc closes, `P` `[` `]` stop working
-  (task 8).
-- **Mouse is stored in scaled GUI pixels** at the recording's resolution (task 9).
 - **No drawn cursor:** the OS draws it, so an export needs a sprite (Phase 4).
+- Mining crumb particles (`ParticleManager.addBlockBreakingParticles`) have no packet and do not replay.
+- A replayed driven player may play its own water splash on top of the recorded one; listen for it.
+- Synthesised `ClientPlayerEntity.playSound` and hit sounds use a fresh seed, so the variant may differ.
+- The portal trigger sound (`BLOCK_PORTAL_TRIGGER`, client-only) is not recorded.
+- Boat paddles do not animate on replay; they come from the rider's movement input, which is not recorded.
+- A seek into a stretch where a container was already open cannot show it; the snapshot does not
+  re-send the open-screen packet.
+- A replayed `OpenScreenS2CPacket` replaces the viewer's pause menu if it is open.
+- Holding `]` over a replayed screen repeats the seek; bed chat replays as a plain `ChatScreen`.
 
 ---
 
@@ -147,18 +162,18 @@ Goal: playback of blocks, a chest, item moves, chat typing and a portal looks ri
       Written, unverified
 - [ ] 5. Local prediction as synthesised packets: one `ClientWorld` mixin on `syncWorldEvent`,
       `playSound`, `setBlockBreakingInfo` for the local player, skipping calls from inside network
-      handlers (Wave 2, Local prediction)
+      handlers (Wave 2, Local prediction; written, unverified)
 - [ ] 6. Screen contents: `InventoryS2CPacket` for `currentScreenHandler` when stacks or cursor change
-      (Wave 2, Screens)
+      (Wave 2, Screens; written, unverified)
 - [ ] 7. Screen state: split `SCREEN_OTHER` into `CONTAINER` and `OTHER`, record the chat draft;
-      playback closes on NONE, opens `InventoryScreen` and `ChatScreen` (Wave 2, Screens)
+      playback closes on NONE, opens `InventoryScreen` and `ChatScreen` (Wave 2, Screens; written, unverified)
 - [ ] 8. Replayed screens ignore the viewer via `ScreenMouseEvents` / `ScreenKeyboardEvents`, with `P`,
-      `[`, `]` and Esc handled there (Wave 2, Screens)
+      `[`, `]` and Esc handled there (Wave 2, Screens; written, unverified)
 - [ ] 9. Cursor stored normalised (format version bump) and fed to screen rendering through a
-      `GameRenderer.render` mouse-argument mixin (Wave 2, Cursor)
-- [ ] 10. Portal warp: `nauseaIntensity` in `UI_STATE`. Fire ticks in `LOCAL_PLAYER` (Wave 2, Body state)
+      `GameRenderer.render` mouse-argument mixin (Wave 2, Cursor; written, unverified)
+- [ ] 10. Portal warp: `nauseaIntensity` in `UI_STATE`. Fire ticks in `LOCAL_PLAYER` (Wave 2, Body state; written, unverified)
 - [ ] 11. `ENTITY_MOVE` records only the local player and its root vehicle; apply the vehicle pose
-      (Wave 2, Body state)
+      (Wave 2, Body state; written, unverified)
 - [ ] 12. **Gate:** a recording with block breaking and placing, a chest, item moves, chat typing and
       a portal plays back right. Also record once on a local `runServer` (coordinator and user)
 
@@ -221,21 +236,17 @@ Goal: playback of blocks, a chest, item moves, chat typing and a portal looks ri
 
 ## Next session
 
-1. In-game batch on `2026-09-01_22-14-15.momenton` (existing items plus Wave 1). Nothing needs
-   recording unless a step fails:
-   1. Around ticks 411-433 (two sweeps back to back): sweep arc, mob flash and knockback, sweep sound.
-      Around ticks 89 and 1624: crit particles. If missing, `tools/Effects` proves the packets are in
-      the file, so check `run/logs/latest.log` for which end lost them.
-   2. Around ticks 16-28, 148-159 and 168-178: the arm keeps swinging through each burst.
-   3. Press `P` mid-swing: arm, cooldown ring, mobs, particles and items stop dead. Nothing shakes.
-      Unpause: it resumes without a jump.
-   4. Pause near the start, then `]` repeatedly: the selected hotbar slot and hotbar contents always
-      match where it lands, and no swing fires on landing. Then play at 1x: swings look as before.
-   5. Seek across the Nether crossings at 1055 and 1265; each lands in the right dimension.
-   6. Set your view to first person, then leave playback via the pause menu's Disconnect: no
-      `ClosedChannelException`, and you are still in first person. Repeat by closing the window.
-2. Make one new recording, over 75 s, flying fast across chunk borders around 25 s, 50 s and 75 s.
-   Run `checkReplay` on it (Boundary now has something to test) and read the `Snapshot N took X ms`
-   lines in `run/logs/latest.log`.
-3. Start Wave 2 (Local prediction, Screens, Cursor, Body state). After it, the coordinator merges,
-   runs `build` and `checkReplay`, and the user does one in-game pass.
+Waves 1 and 2 are merged and unobserved. The user tests everything together after Wave 3.
+
+1. Launch `gradlew.bat runClient`: no mixin apply error (17 client mixins).
+2. On `2026-09-01_22-14-15.momenton`: sweeps at 411-433, crits at 89 and 1624; swing bursts at 16-28,
+   148-159, 168-178; `P` mid-swing freezes everything without shaking; `]` from near the start keeps the
+   slot and hotbar right with no swing on landing; seek across 1055 and 1265; leave via Disconnect and
+   by closing the window (no `ClosedChannelException`, own perspective restored).
+3. One new recording covering: breaking and placing blocks, slow mining with one cancel, eating,
+   walking, a door; inventory with item moves and a cursor stack; a chest with moves and a
+   shift-click; a crafting table; a chat draft left unsent, then a sent message; a Nether portal
+   warp; lava in and out; a boat and a horse with a remount; fast flying across chunk borders around
+   25 s, 50 s and 75 s. Then `checkReplay` on it, the `Snapshot N took X ms` lines, and a replay
+   checking each item in **Not yet verified**.
+4. Wave 3 (Pipeline, Export loop, Edit model), then the Phase 4 gate.
