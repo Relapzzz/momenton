@@ -11,7 +11,8 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Arrays;
 
 /**
- * Emits a {@code LOCAL_PLAYER} action whenever the recorded player's vitals or carried items change.
+ * Emits a {@code LOCAL_PLAYER} action whenever the recorded player's vitals, carried items, portal warp
+ * or fire ticks change.
  *
  * <p>Most of this also crosses the wire, but having it as first-class state means a seek can restore
  * the player from a snapshot boundary instead of replaying inventory packets from tick zero.
@@ -20,6 +21,7 @@ final class LocalPlayerWriter {
 	private static final int FLAG_VITALS = LocalPlayerCodec.FLAG_VITALS;
 	private static final int FLAG_HOTBAR = LocalPlayerCodec.FLAG_HOTBAR;
 	private static final int FLAG_OFFHAND = LocalPlayerCodec.FLAG_OFFHAND;
+	private static final int FLAG_OVERLAYS = LocalPlayerCodec.FLAG_OVERLAYS;
 
 	private static final int HOTBAR_SIZE = LocalPlayerCodec.HOTBAR_SIZE;
 
@@ -33,6 +35,8 @@ final class LocalPlayerWriter {
 	private int experienceLevel;
 	private float experienceProgress;
 	private ItemStack offhand = ItemStack.EMPTY;
+	private float nauseaIntensity;
+	private int fireTicks;
 	private boolean forced;
 
 	LocalPlayerWriter(DynamicRegistryManager registries) {
@@ -69,13 +73,18 @@ final class LocalPlayerWriter {
 		ItemStack currentOffhand = player.getOffHandStack();
 		boolean offhandChanged = forced || !ItemStack.areEqual(currentOffhand, offhand);
 
-		if (!vitalsChanged && !hotbarChanged && !offhandChanged) {
+		boolean overlaysChanged = forced
+				|| player.nauseaIntensity != nauseaIntensity
+				|| player.getFireTicks() != fireTicks;
+
+		if (!vitalsChanged && !hotbarChanged && !offhandChanged && !overlaysChanged) {
 			return null;
 		}
 		forced = false;
 
 		RegistryByteBuf buf = new RegistryByteBuf(Unpooled.buffer(64), registries);
-		buf.writeByte((vitalsChanged ? FLAG_VITALS : 0) | (hotbarChanged ? FLAG_HOTBAR : 0) | (offhandChanged ? FLAG_OFFHAND : 0));
+		buf.writeByte((vitalsChanged ? FLAG_VITALS : 0) | (hotbarChanged ? FLAG_HOTBAR : 0) | (offhandChanged ? FLAG_OFFHAND : 0)
+				| (overlaysChanged ? FLAG_OVERLAYS : 0));
 
 		if (vitalsChanged) {
 			health = player.getHealth();
@@ -103,6 +112,13 @@ final class LocalPlayerWriter {
 		if (offhandChanged) {
 			offhand = currentOffhand.copy();
 			ItemStack.OPTIONAL_PACKET_CODEC.encode(buf, offhand);
+		}
+
+		if (overlaysChanged) {
+			nauseaIntensity = player.nauseaIntensity;
+			fireTicks = player.getFireTicks();
+			buf.writeFloat(nauseaIntensity);
+			buf.writeVarInt(fireTicks);
 		}
 
 		byte[] payload = new byte[buf.readableBytes()];

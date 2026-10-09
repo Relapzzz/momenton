@@ -4,8 +4,12 @@ import com.relapzz.momenton.Momenton;
 import com.relapzz.momenton.format.EntityMoveCodec;
 import com.relapzz.momenton.format.FrameTrack;
 import com.relapzz.momenton.format.LocalPlayerCodec;
+import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.input.Input;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.entity.Entity;
 import net.minecraft.registry.DynamicRegistryManager;
 import net.minecraft.util.Hand;
 import net.minecraft.util.PlayerInput;
@@ -21,10 +25,10 @@ import java.io.IOException;
  * walks away, so nothing drawn about the player - the model in third person, the arm, anything vanilla
  * measures from {@code client.player} - is where it was.
  *
- * <p>It also applies the {@code LOCAL_PLAYER} track - vitals, hotbar and offhand. Most of that also
- * crosses the wire and the two agree; what only lives in the track is an inventory change made through
- * the inventory screen, which the client performs itself and merely reports, so no clientbound packet
- * ever carries it.
+ * <p>It also applies the {@code LOCAL_PLAYER} track - vitals, hotbar, offhand, portal warp and fire
+ * ticks. Most of that also crosses the wire and the two agree; what only lives in the track is what
+ * the client does for itself - an inventory change made through the inventory screen, the warp of
+ * standing in a portal, the fire of touching lava - which no clientbound packet ever carries.
  *
  * <p>Position, but not rotation. Rotation is {@link PovDriver}'s, because it was frame-rate live and
  * rebuilding it at tick rate makes the hand shake; and head yaw is not set at all, because
@@ -58,7 +62,10 @@ public final class LocalPlayerDriver {
 	 */
 	private static final Input INPUT = new Input();
 
+	private static final Int2ObjectMap<Pose> VEHICLES = new Int2ObjectOpenHashMap<>();
+
 	private static LocalPlayerCodec.State state;
+	private static LocalPlayerCodec.State overlays;
 	private static boolean based;
 	private static boolean pending;
 	private static double x;
@@ -72,15 +79,18 @@ public final class LocalPlayerDriver {
 		based = false;
 		pending = false;
 		state = null;
+		overlays = null;
+		VEHICLES.clear();
 	}
 
 	/**
 	 * Decodes one {@code LOCAL_PLAYER} action and holds it for the next player tick.
 	 *
 	 * <p>Most of this also arrives as packets, and where it does the two agree. What only lives here is
-	 * an inventory change made through the inventory screen: the client moves the stack itself and
-	 * tells the server, so nothing clientbound ever carries it and a replay driven by packets alone
-	 * shows the item never moving.
+	 * what the client predicts for itself. An inventory change made through the inventory screen: the
+	 * client moves the stack itself and tells the server, so nothing clientbound ever carries it and a
+	 * replay driven by packets alone shows the item never moving. The portal warp and the fire of
+	 * touching lava: the client sets both from its own collisions, which the driven player never has.
 	 */
 	static void acceptState(byte[] payload, DynamicRegistryManager registries) {
 		state = merge(state, LocalPlayerCodec.decode(payload, registries));
@@ -91,10 +101,12 @@ public final class LocalPlayerDriver {
 			return later;
 		}
 		LocalPlayerCodec.State vitals = later.hasVitals() ? later : earlier;
+		LocalPlayerCodec.State overlay = later.hasOverlays() ? later : earlier;
 		return new LocalPlayerCodec.State(vitals.hasVitals(), vitals.health(), vitals.food(), vitals.saturation(),
 				vitals.air(), vitals.experienceLevel(), vitals.experienceProgress(),
 				later.hotbar() != null ? later.hotbar() : earlier.hotbar(),
-				later.offhand() != null ? later.offhand() : earlier.offhand());
+				later.offhand() != null ? later.offhand() : earlier.offhand(),
+				overlay.hasOverlays(), overlay.nauseaIntensity(), overlay.fireTicks());
 	}
 
 	/** Client thread, head of the replayed player's tick. Applied before vanilla reads any of it. */
@@ -122,10 +134,22 @@ public final class LocalPlayerDriver {
 		if (current.offhand() != null) {
 			player.setStackInHand(Hand.OFF_HAND, current.offhand());
 		}
+		if (current.hasOverlays()) {
+			overlays = current;
+		}
+	}
+
+	public static void driveOverlays(ClientPlayerEntity player) {
+		if (overlays == null) {
+			return;
+		}
+		player.nauseaIntensity = overlays.nauseaIntensity();
+		player.setFireTicks(overlays.fireTicks());
 	}
 
 	/**
-	 * Decodes one {@code ENTITY_MOVE} action and keeps whatever it says about the local player.
+	 * Decodes one {@code ENTITY_MOVE} action and keeps whatever it says about the local player and the
+	 * vehicles it rides.
 	 *
 	 * <p>Deltas accumulate onto the last absolute pose, so this has to see every action in order. The
 	 * recorder resets its trackers at each chunk boundary, which is what makes the first action after a
@@ -135,6 +159,7 @@ public final class LocalPlayerDriver {
 		try {
 			EntityMoveCodec.decode(payload, (id, flags, ex, ey, ez, eyaw, epitch, ehead) -> {
 				if (id != localPlayerId) {
+					acceptVehicleMove(id, flags, ex, ey, ez, eyaw, epitch);
 					return;
 				}
 				if ((flags & EntityMoveCodec.FLAG_POS_ABSOLUTE) != 0) {
@@ -154,6 +179,43 @@ public final class LocalPlayerDriver {
 		}
 	}
 
+	private static void acceptVehicleMove(int id, int flags, double x, double y, double z, float yaw, float pitch) {
+		Pose pose = (flags & EntityMoveCodec.FLAG_POS_ABSOLUTE) != 0
+				? VEHICLES.computeIfAbsent(id, key -> new Pose())
+				: VEHICLES.get(id);
+		if (pose == null) {
+			return;
+		}
+		if ((flags & EntityMoveCodec.FLAG_POS_ABSOLUTE) != 0) {
+			pose.x = x;
+			pose.y = y;
+			pose.z = z;
+		} else if ((flags & EntityMoveCodec.FLAG_POS_DELTA) != 0) {
+			pose.x += x;
+			pose.y += y;
+			pose.z += z;
+		}
+		if ((flags & EntityMoveCodec.FLAG_ROTATION) != 0) {
+			pose.yaw = yaw;
+			pose.pitch = pitch;
+		}
+	}
+
+	public static void driveVehicle(Entity vehicle) {
+		Pose pose = VEHICLES.get(vehicle.getId());
+		if (pose == null) {
+			return;
+		}
+		if (MinecraftClient.getInstance().player.getRootVehicle() != vehicle) {
+			VEHICLES.remove(vehicle.getId());
+			return;
+		}
+		vehicle.setVelocity(Vec3d.ZERO);
+		vehicle.setPosition(pose.x, pose.y, pose.z);
+		vehicle.setYaw(pose.yaw);
+		vehicle.setPitch(pose.pitch);
+	}
+
 	/** Client thread, head of the replayed player's tick. */
 	public static void drive(ClientPlayerEntity player) {
 		int flags = PovDriver.flags();
@@ -168,7 +230,7 @@ public final class LocalPlayerDriver {
 		player.input = INPUT;
 		applyState(player);
 
-		if (!pending) {
+		if (!pending || player.hasVehicle()) {
 			return;
 		}
 		pending = false;
@@ -184,6 +246,22 @@ public final class LocalPlayerDriver {
 	 */
 	static void snap(ClientPlayerEntity player) {
 		drive(player);
+		Entity vehicle = player.getRootVehicle();
+		if (vehicle != player) {
+			driveVehicle(vehicle);
+			vehicle.resetPosition();
+			vehicle.updatePassengerPosition(player);
+		}
 		player.resetPosition();
+		driveOverlays(player);
+		player.lastNauseaIntensity = player.nauseaIntensity;
+	}
+
+	private static final class Pose {
+		private double x;
+		private double y;
+		private double z;
+		private float yaw;
+		private float pitch;
 	}
 }

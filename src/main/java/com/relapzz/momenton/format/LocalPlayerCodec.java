@@ -23,6 +23,7 @@ public final class LocalPlayerCodec {
 	public static final int FLAG_VITALS = 1;
 	public static final int FLAG_HOTBAR = 2;
 	public static final int FLAG_OFFHAND = 4;
+	public static final int FLAG_OVERLAYS = 8;
 
 	public static final int HOTBAR_SIZE = 9;
 
@@ -31,10 +32,12 @@ public final class LocalPlayerCodec {
 
 	/**
 	 * A decoded action. {@code hotbar} and {@code offhand} are null when the action did not carry them;
-	 * the vitals have no such marker of their own, so {@code hasVitals} says whether they mean anything.
+	 * the vitals and overlays have no such marker of their own, so {@code hasVitals} and
+	 * {@code hasOverlays} say whether they mean anything.
 	 */
 	public record State(boolean hasVitals, float health, int food, float saturation, int air,
-			int experienceLevel, float experienceProgress, List<ItemStack> hotbar, ItemStack offhand) {
+			int experienceLevel, float experienceProgress, List<ItemStack> hotbar, ItemStack offhand,
+			boolean hasOverlays, float nauseaIntensity, int fireTicks) {
 	}
 
 	public static State decode(byte[] payload, DynamicRegistryManager registries) {
@@ -65,7 +68,14 @@ public final class LocalPlayerCodec {
 		}
 
 		ItemStack offhand = (flags & FLAG_OFFHAND) != 0 ? ItemStack.OPTIONAL_PACKET_CODEC.decode(buf) : null;
+
+		float nauseaIntensity = 0.0f;
+		int fireTicks = 0;
+		if ((flags & FLAG_OVERLAYS) != 0) {
+			nauseaIntensity = buf.readFloat();
+			fireTicks = buf.readVarInt();
+		}
 		return new State((flags & FLAG_VITALS) != 0, health, food, saturation, air, experienceLevel,
-				experienceProgress, hotbar, offhand);
+				experienceProgress, hotbar, offhand, (flags & FLAG_OVERLAYS) != 0, nauseaIntensity, fireTicks);
 	}
 }
