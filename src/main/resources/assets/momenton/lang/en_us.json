@@ -29,6 +29,7 @@
   "screen.momenton.editor.hud.title": "Titles",
   "screen.momenton.editor.hud.action_bar": "Action bar",
   "screen.momenton.editor.hud.scoreboard": "Scoreboard",
+  "screen.momenton.other_version": "Recorded in %s",
   "screen.momenton.empty": "No recordings yet. Press F9 in a world to make one.",
   "screen.momenton.export": "Export",
   "screen.momenton.export.title": "Export Video",

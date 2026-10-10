@@ -1,6 +1,7 @@
 package com.relapzz.momenton.playback;
 
 import com.relapzz.momenton.format.FrameTrack;
+import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.option.Perspective;
 import net.minecraft.entity.Entity;
@@ -68,9 +69,9 @@ public final class PovDriver {
 	}
 
 	@Nullable
-	public static FrameTrack.Pose screenCursor(float tickProgress) {
+	public static FrameTrack.Pose screenCursor(@Nullable Screen screen, float tickProgress) {
 		FrameTrack current = track;
-		FrameTrack.Pose pose = current != null && current.normalisedMouse() ? pose(tickProgress) : null;
+		FrameTrack.Pose pose = current != null && current.normalisedMouse() && ReplayScreenInput.isReplayScreen(screen) ? pose(tickProgress) : null;
 		return pose != null && (pose.flags() & FrameTrack.FLAG_SCREEN_OPEN) != 0 ? pose : null;
 	}
 

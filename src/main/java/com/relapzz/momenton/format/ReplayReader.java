@@ -1,5 +1,7 @@
 package com.relapzz.momenton.format;
 
+import net.fabricmc.loader.api.FabricLoader;
+
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
@@ -25,6 +27,14 @@ public final class ReplayReader implements Closeable {
 
 	public ReplayMetadata metadata() {
 		return metadata;
+	}
+
+	public boolean recordedInRunningVersion() {
+		return metadata.minecraftVersion() == null || metadata.minecraftVersion().equals(runningMinecraftVersion());
+	}
+
+	public static String runningMinecraftVersion() {
+		return FabricLoader.getInstance().getModContainer("minecraft").orElseThrow().getMetadata().getVersion().getFriendlyString();
 	}
 
 	/** True for replays made before the setup track existed, which can be inspected but not played. */

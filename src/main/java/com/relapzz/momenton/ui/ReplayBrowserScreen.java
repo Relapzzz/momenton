@@ -10,6 +10,7 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -150,13 +151,17 @@ public class ReplayBrowserScreen extends Screen {
 	private static Entry describe(Path file) {
 		try (ReplayReader reader = new ReplayReader(file)) {
 			ReplayMetadata metadata = reader.metadata();
-			boolean playable = reader.hasSetup() && reader.hasSnapshot(0);
+			boolean sameVersion = reader.recordedInRunningVersion();
+			boolean playable = sameVersion && reader.hasSetup() && reader.hasSnapshot(0);
 			int seconds = metadata.durationTicks() / 20;
 			String summary = String.format("%s   %d:%02d   %s",
 					metadata.describeWorld(),
 					seconds / 60, seconds % 60,
 					WHEN.format(Instant.ofEpochMilli(metadata.createdAtEpochMs())));
-			return new Entry(file, Text.literal(summary + (playable ? "" : "   (too old to play)")), playable, metadata.durationTicks());
+			Text label = sameVersion
+					? Text.literal(summary + (playable ? "" : "   (too old to play)"))
+					: Text.literal(summary + "   ").append(Text.translatable("screen.momenton.other_version", metadata.minecraftVersion())).formatted(Formatting.GRAY);
+			return new Entry(file, label, playable, metadata.durationTicks());
 		} catch (IOException e) {
 			return new Entry(file, Text.literal(file.getFileName() + "   (unreadable)"), false, 0);
 		}

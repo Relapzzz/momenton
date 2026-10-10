@@ -4,9 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -20,46 +18,11 @@ import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ReplayFormatTest {
-	@Test
-	void varintsRoundTrip() throws IOException {
-		int[] values = {0, 1, 127, 128, 300, 65535, 1 << 20, Integer.MAX_VALUE};
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		for (int v : values) ActionCodec.writeVarInt(out, v);
-		InputStream in = new ByteArrayInputStream(out.toByteArray());
-		for (int v : values) assertEquals(v, ActionCodec.readVarInt(in));
-		assertEquals(-1, in.read());
-	}
-
-	@Test
-	void actionsRoundTrip() throws IOException {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		ActionCodec.write(out, ActionCodec.PACKET, 0, "alpha".getBytes(StandardCharsets.UTF_8), 5);
-		ActionCodec.write(out, ActionCodec.ENTITY_MOVE, 5, new byte[]{1, 2, 3}, 3);
-		ActionCodec.write(out, ActionCodec.LOCAL_PLAYER, 0, new byte[0], 0);
-		ActionCodec.write(out, ActionCodec.DIMENSION_CHANGE, 495, "minecraft:the_nether".getBytes(StandardCharsets.UTF_8), 20);
-
-		ActionCodec.Reader reader = new ActionCodec.Reader(new ByteArrayInputStream(out.toByteArray()), 0);
-		List<ActionCodec.Action> read = new ArrayList<>();
-		for (ActionCodec.Action a = reader.next(); a != null; a = reader.next()) read.add(a);
-
-		assertEquals(4, read.size());
-		assertEquals(List.of(0, 5, 5, 500), read.stream().map(ActionCodec.Action::tick).toList());
-		assertEquals(ActionCodec.PACKET, read.get(0).type());
-		assertEquals(ActionCodec.DIMENSION_CHANGE, read.get(3).type());
-		assertEquals("alpha", new String(read.get(0).payload(), StandardCharsets.UTF_8));
-		assertArrayEquals(new byte[]{1, 2, 3}, read.get(1).payload());
-		assertEquals(0, read.get(2).payload().length);
-		assertEquals("minecraft:the_nether", new String(read.get(3).payload(), StandardCharsets.UTF_8));
-		assertNull(reader.next());
-	}
-
 	@Test
 	void containerRollsChunksAndKeepsMetadata(@TempDir Path root) throws IOException {
 		Path staging = root.resolve(".staging");

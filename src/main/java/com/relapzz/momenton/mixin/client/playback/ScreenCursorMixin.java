@@ -21,14 +21,14 @@ public class ScreenCursorMixin {
 	@ModifyExpressionValue(method = "render(Lnet/minecraft/client/render/RenderTickCounter;Z)V",
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Mouse;getScaledX(Lnet/minecraft/client/util/Window;)D"))
 	private double momenton$recordedCursorX(double x, @Local(argsOnly = true) RenderTickCounter counter) {
-		FrameTrack.Pose pose = PovDriver.screenCursor(counter.getTickProgress(true));
+		FrameTrack.Pose pose = PovDriver.screenCursor(client.currentScreen, counter.getTickProgress(true));
 		return pose == null ? x : pose.mouseX() * client.getWindow().getScaledWidth();
 	}
 
 	@ModifyExpressionValue(method = "render(Lnet/minecraft/client/render/RenderTickCounter;Z)V",
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Mouse;getScaledY(Lnet/minecraft/client/util/Window;)D"))
 	private double momenton$recordedCursorY(double y, @Local(argsOnly = true) RenderTickCounter counter) {
-		FrameTrack.Pose pose = PovDriver.screenCursor(counter.getTickProgress(true));
+		FrameTrack.Pose pose = PovDriver.screenCursor(client.currentScreen, counter.getTickProgress(true));
 		return pose == null ? y : pose.mouseY() * client.getWindow().getScaledHeight();
 	}
 }
