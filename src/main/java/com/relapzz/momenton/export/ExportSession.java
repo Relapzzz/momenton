@@ -2,9 +2,11 @@ package com.relapzz.momenton.export;
 
 import com.relapzz.momenton.Momenton;
 import com.relapzz.momenton.audio.LoopbackRenderer;
+import com.relapzz.momenton.edit.Clip;
 import com.relapzz.momenton.format.ReplayMetadata;
 import com.relapzz.momenton.format.ReplayReader;
 import com.relapzz.momenton.mixin.client.export.ChunkRenderingDataPreparerAccessor;
+import com.relapzz.momenton.mixin.client.export.ClientWorldAccessor;
 import com.relapzz.momenton.playback.ReplaySession;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.RenderPipelines;
@@ -15,6 +17,7 @@ import net.minecraft.client.render.WorldRenderer;
 import net.minecraft.client.render.chunk.BlockBufferBuilderPool;
 import net.minecraft.client.toast.SystemToast;
 import net.minecraft.client.util.Window;
+import net.minecraft.entity.PositionInterpolator;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import org.lwjgl.glfw.GLFW;
@@ -23,10 +26,12 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.Future;
 
 public final class ExportSession {
 	private static final Identifier CURSOR = Momenton.id("textures/gui/cursor.png");
+	private static final int CHUNK_WAIT_LIMIT = 600;
 
 	private static ExportSession active;
 
@@ -39,9 +44,14 @@ public final class ExportSession {
 	private final int guiScale;
 	private final int frames;
 
-	private boolean settling = true;
+	private boolean settling;
+	private int settleTick;
+	private int settledTicks;
+	private int waited;
 	private boolean cancelled;
 	private int frame;
+	private int clip;
+	private int clipStart;
 	private int target;
 	private int reported;
 	private RenderTickCounter counter;
@@ -57,6 +67,7 @@ public final class ExportSession {
 		this.grabber = new FrameGrabber(settings.width(), settings.height());
 		this.guiScale = guiScale(metadata, settings);
 		this.frames = frames;
+		locate();
 	}
 
 	public static boolean isExporting() {
@@ -72,7 +83,7 @@ public final class ExportSession {
 			return;
 		}
 		if (client.world != null && !ReplaySession.isPlaying()) {
-			report(client, false, "Leave the world before exporting");
+			showFailure(client, "Leave the world before exporting");
 			return;
 		}
 
@@ -81,16 +92,12 @@ public final class ExportSession {
 			metadata = reader.metadata();
 		} catch (IOException e) {
 			Momenton.LOGGER.error("Could not read {}", settings.replay(), e);
-			report(client, false, "Could not read the replay");
+			showFailure(client, "Could not read the replay");
 			return;
 		}
 
-		int end = Math.min(settings.clips().getLast().endTick(), metadata.durationTicks() - 1);
-		int frames = (int) (((long) (end - settings.clips().getFirst().startTick()) * settings.fps() + 19) / 20);
-		if (frames <= 0) {
-			report(client, false, "Nothing to export between those ticks");
-			return;
-		}
+		int length = settings.clips().stream().mapToInt(Clip::length).sum();
+		int frames = (int) (((long) length * settings.fps() + 19) / 20);
 
 		Path output = settings.output();
 		Path video = output.resolveSibling("momenton-video-" + output.getFileName());
@@ -99,7 +106,7 @@ public final class ExportSession {
 			ffmpeg = FfmpegProcess.start(settings.ffmpegCommand(), settings.ffmpegArgs(), settings.width(), settings.height(), settings.fps(), settings.bitrate(), video);
 		} catch (IOException e) {
 			Momenton.LOGGER.error("Could not start FFmpeg", e);
-			report(client, false, "Could not start FFmpeg: " + e.getMessage());
+			showFailure(client, "Could not start FFmpeg: " + e.getMessage());
 			return;
 		}
 
@@ -110,7 +117,7 @@ public final class ExportSession {
 			ffmpeg.close();
 			delete(video);
 			Momenton.LOGGER.error("Could not create the audio file", e);
-			report(client, false, "Could not create the audio file: " + e.getMessage());
+			showFailure(client, "Could not create the audio file: " + e.getMessage());
 			return;
 		}
 
@@ -119,22 +126,19 @@ public final class ExportSession {
 			ffmpeg.close();
 			audio.close();
 			delete(video);
-			report(client, false, "Could not open the replay");
+			showFailure(client, "Could not open the replay");
 			return;
 		}
-		if (!ReplaySession.isPaused()) {
-			ReplaySession.togglePause();
-		}
-		ReplaySession.seek(settings.clips().getFirst().startTick());
 
 		active = new ExportSession(client, settings, metadata, frames, ffmpeg, video, audio);
+		active.settle();
 		Window window = client.getWindow();
 		window.setVsync(false);
 		window.setFramebufferWidth(settings.width());
 		window.setFramebufferHeight(settings.height());
 		client.onResolutionChanged();
-		Momenton.LOGGER.info("Exporting {} frames of {} at {}x{} {} fps to {}", frames, settings.replay().getFileName(),
-				settings.width(), settings.height(), settings.fps(), settings.output());
+		Momenton.LOGGER.info("Exporting {} frames of {} in {} clips at {}x{} {} fps to {}", frames, settings.replay().getFileName(),
+				settings.clips().size(), settings.width(), settings.height(), settings.fps(), settings.output());
 	}
 
 	public static void cancel() {
@@ -154,9 +158,14 @@ public final class ExportSession {
 		}
 		if (session.cancelled) {
 			session.end(false, "Export cancelled");
+			report(session.client, false, "Export cancelled");
 			return ticks;
 		}
-		return session.settling ? ticks : session.beginFrame();
+		if (session.settling) {
+			session.settledTicks += ticks;
+			return ticks;
+		}
+		return Math.max(0, session.target - ReplaySession.currentTick());
 	}
 
 	public static RenderTickCounter counter(RenderTickCounter counter) {
@@ -196,11 +205,29 @@ public final class ExportSession {
 		return Math.max(1, (int) Math.round(metadata.guiScale() * ratio));
 	}
 
-	private int beginFrame() {
+	private boolean locate() {
+		List<Clip> clips = settings.clips();
 		long ticks = (long) frame * 20;
-		target = settings.clips().getFirst().startTick() + (int) (ticks / settings.fps());
+		int offset = (int) (ticks / settings.fps());
+		boolean cut = false;
+		while (clip + 1 < clips.size() && offset >= clipStart + clips.get(clip).length()) {
+			cut |= clips.get(clip).endTick() != clips.get(clip + 1).startTick();
+			clipStart += clips.get(clip).length();
+			clip++;
+		}
+		target = clips.get(clip).startTick() + offset - clipStart;
 		counter = new FrameCounter((float) (ticks % settings.fps()) / settings.fps(), 20.0f / settings.fps());
-		return Math.max(0, target + 1 - ReplaySession.currentTick());
+		return cut;
+	}
+
+	private void settle() {
+		settling = true;
+		settledTicks = 0;
+		settleTick = Math.max(0, target - 1);
+		if (!ReplaySession.isPaused()) {
+			ReplaySession.togglePause();
+		}
+		ReplaySession.seek(settleTick);
 	}
 
 	private void rendered() {
@@ -209,15 +236,17 @@ public final class ExportSession {
 			return;
 		}
 		if (settling) {
-			if (!(client.currentScreen instanceof LevelLoadingScreen) && terrainBuilt()) {
-				ReplaySession.seek(settings.clips().getFirst().startTick());
+			if (settledTicks >= PositionInterpolator.DEFAULT_INTERPOLATION_DURATION
+					&& !(client.currentScreen instanceof LevelLoadingScreen) && built()) {
+				ReplaySession.seek(settleTick);
 				ReplaySession.togglePause();
 				audio.stopOneShots();
+				client.particleManager.clearParticles();
 				settling = false;
 			}
 			return;
 		}
-		if (counter == null || ReplaySession.currentTick() != target + 1 || !terrainBuilt()) {
+		if (ReplaySession.currentTick() != target || !built()) {
 			return;
 		}
 
@@ -240,7 +269,22 @@ public final class ExportSession {
 		}
 		if (frame == frames) {
 			finish();
+		} else if (locate()) {
+			settle();
 		}
+	}
+
+	private boolean built() {
+		if (terrainBuilt()) {
+			waited = 0;
+			return true;
+		}
+		if (++waited < CHUNK_WAIT_LIMIT) {
+			return false;
+		}
+		Momenton.LOGGER.warn("Terrain still building after {} render passes at tick {}, grabbing anyway", waited, ReplaySession.currentTick());
+		waited = 0;
+		return true;
 	}
 
 	private boolean terrainBuilt() {
@@ -248,7 +292,8 @@ public final class ExportSession {
 		ChunkRenderingDataPreparerAccessor graph = (ChunkRenderingDataPreparerAccessor) renderer.getChunkRenderingDataPreparer();
 		Future<?> update = graph.getTerrainUpdateFuture();
 		BlockBufferBuilderPool buffers = client.getBufferBuilders().getBlockBufferBuildersPool();
-		return renderer.isTerrainRenderComplete()
+		return ((ClientWorldAccessor) client.world).getChunkUpdaters().isEmpty()
+				&& renderer.isTerrainRenderComplete()
 				&& buffers.getAvailableBuilderCount() == ((ChunkBufferPool) buffers).momenton$capacity()
 				&& !graph.isTerrainUpdateScheduled()
 				&& (update == null || update.isDone())
@@ -278,12 +323,16 @@ public final class ExportSession {
 			fail(e);
 			return;
 		}
-		end(true, "Saved " + settings.output());
+		String message = "Saved " + settings.output();
+		end(true, message);
+		report(client, true, message);
 	}
 
 	private void fail(IOException e) {
 		Momenton.LOGGER.error("Export failed", e);
-		end(false, "Export failed: " + e.getMessage());
+		String message = "Export failed: " + e.getMessage();
+		end(false, message);
+		showFailure(client, message);
 	}
 
 	private void end(boolean saved, String message) {
@@ -308,7 +357,6 @@ public final class ExportSession {
 			ReplaySession.togglePause();
 		}
 		Momenton.LOGGER.info("Export ended after {} of {} frames: {}", frame, frames, message);
-		report(client, saved, message);
 	}
 
 	private static void delete(Path path) {
@@ -317,6 +365,10 @@ public final class ExportSession {
 		} catch (IOException e) {
 			Momenton.LOGGER.warn("Could not delete {}", path, e);
 		}
+	}
+
+	private static void showFailure(MinecraftClient client, String message) {
+		report(client, false, message);
 	}
 
 	private static void report(MinecraftClient client, boolean saved, String message) {
