@@ -57,10 +57,10 @@ Written but unobserved work goes in **Not yet verified**.
 ## Current state
 
 - Phases 0-2 complete and observed. Phases 3-7 written; much of it observed in five in-game runs on
-  2026-10-10 (see below). Waves 0-9 merged on `main`.
-- Last build (2026-10-10, after Wave 9): `./gradlew build --offline --rerun-tasks` green, 93 tests, 0
-  skipped, 0 failed; `checkReplay` ALL PASS (Inspect, Setup, Motion, Swing, Boundary) on
-  `2026-10-10_09-42-39`; 47 client mixins; no OpenGL imports. All agent worktrees removed.
+  2026-10-10 (see below). Waves 0-10 merged on `main`.
+- Last build (2026-10-10, after Wave 10): `./gradlew build --offline --rerun-tasks` green, 94 tests,
+  0 skipped, 0 failed; `checkReplay` ALL PASS on `2026-10-10_09-42-39` and on the user's server
+  recording `2026-10-10_20-21-31` (mcpvp); 47 client mixins; no OpenGL imports. Worktrees removed.
 - The user's eighth-run recordings `2026-10-10_18-28-04` and `_18-30-32` (profile below; copies in
   `%TEMP%/mrec`) pass everything except the new command-tree check, which they predate.
 - The user tests in their own Modrinth profile (VulkanMod, HeroBot, PvP client mods):
@@ -77,6 +77,17 @@ Written but unobserved work goes in **Not yet verified**.
   back; mic track; the main test file) and `2026-10-10_09-02-53.momenton` (1596 ticks; Nether at
   1142 and back at 1482; its mic entry predates `4d582d2`, so the offline tools reject it - re-zip a
   copy to check it). Exports land in `run/momenton/exports/`.
+
+### Wave 10 (merged, unverified): export under VulkanMod
+
+Ninth run: exporting the mcpvp recording under VulkanMod 0.6.8 crashed with `VK_ERROR_DEVICE_LOST`
+in `Renderer.submitFrame` on the first grab (crash report 2026-10-10_20.25.23; preceded by "Terrain
+still building after 600 render passes"). Root cause from decompiled VulkanMod: the NV12 pass sampled
+the swapchain image with its layout barrier recorded out of order; the readback copy also ran before
+the frame; and the vanilla terrain check never clears there. Fix `bbcc5e7` + `02079c6`: see the
+VulkanMod section of the plan. Also observed in the ninth run's logs: snapshots after the first cost
+3-5 ms (was 8-13 ms) rebuilding 150-265 changed chunks; the first at F9 costs 35-55 ms; the mcpvp
+recording's snapshot carries the command tree, teams, tab header and 23 passenger links.
 
 ### Wave 9 (merged, unverified): mod compatibility, packs, prediction, FOV
 
@@ -111,9 +122,7 @@ Mod audit of the profile (read-only, 58 jars) - remaining mismatches, not fixed:
 - ok_zoomer hides HUD and crosshair while zoomed; the FOV is now replayed but the HUD is not hidden.
 - CrosshairAddons, animatium item-use equip dip, shieldfixes shield sounds: driven by local input
   that never runs in a replay.
-- VulkanMod export (never run): `VkCommandEncoder.copyTextureToBuffer` may read before the frame is
-  submitted (VulkanMod's own screenshot calls `Renderer.flushCmds()` first), the main target may not
-  resize, and the RGBA fallback may swap red and blue (BGRA swapchain). Needs one export to see.
+- VulkanMod export: crashed in the ninth run; fixed from bytecode in Wave 10, unverified in game.
 - AsyncParticles: `clearParticles()` from the export render path may race its async particle tick.
 
 ### Wave 8 (merged, unverified): snapshot parity with a real join
@@ -253,8 +262,11 @@ in `2026-10-10_09-42-39`): the tab list arrived before F9 and was never in a sna
   the driven player is never `onGround`.
 - Server packs pushed mid-recording are not captured (only those active at F9). A recording with a
   client-only block (fake anchor) or any modded block fails to decode that chunk without the mod.
-- The first snapshot at F9 still costs a full build (22-29 ms); the per-packet re-encode on the netty
-  thread is unmeasured.
+- The first snapshot at F9 still costs a full build (35-55 ms measured); the per-packet re-encode on
+  the netty thread is unmeasured.
+- Under VulkanMod an export is window-sized, RGBA through ffmpeg (no NV12), with a GPU sync per frame
+  (slower), no preview in the overlay; a different VulkanMod version may rename the reflected members
+  (export then fails with an IllegalStateException).
 - A title showing at a snapshot is not restored after a seek (titles are cleared, not re-sent).
 - A cooldown running at a snapshot restarts its sweep from full (the packet has no start tick); a boss
   bar mid-animation is captured up to 100 ms behind.
@@ -346,25 +358,18 @@ Complete, observed.
 
 ## Next session
 
-Copy `build/libs/momenton-1.0.0.jar` into the user's profile `mods/` and make NEW recordings (older
-ones lack the command tree, packs and prediction). The coordinator reads the profile's
-`logs/latest.log` and `momenton/recordings/` directly.
+The user runs the remaining Wave 9 checks after the VulkanMod export is confirmed. Copy
+`build/libs/momenton-1.0.0.jar` into the profile's `mods/`; the coordinator reads the profile's
+`logs/latest.log`, `crash-reports/`, `momenton/export.log` and `momenton/recordings/` directly.
 
-1. Launch: no mixin error (47 client mixins).
-2. **Commands:** type an op command in chat while recording; in the replay it is not red.
-3. **Resource pack:** record on the practice map (it has a world pack) or a server with a pack; the
-   replay shows the pack's textures; the log shows `Snapshot rebuilt N of M chunks` with N small after
-   the first snapshot. Leave the replay: the pack unloads.
-4. **Seek:** place and break blocks, place a torch in a dark spot, wait 30 s, seek back and forward
-   across it: blocks and light right every time.
-5. **FOV and sprint:** sprint, drink speed, draw a bow, zoom with ok_zoomer; replay first person
-   matches; third person shows sprint particles.
-6. **Prediction:** on a server with ping: placed blocks appear with their sound; crystals vanish on
-   hit; anchor use shows the fake anchor.
-7. **Riding:** start or seek a replay while riding: no "Press Shift to dismount".
-8. **Server UI:** sidebar, below-name, team colours, boss bar, tab header, holograms after a seek.
-9. **Export under VulkanMod:** one short MP4 export; upright, right colours, not one frame behind,
-   no loading screen in the first frames. Send `momenton/export.log`.
-10. **BetterHitreg:** hit a mob or bot; in the replay, does each hit sound once or twice?
+1. **VulkanMod export:** export the mcpvp recording `2026-10-10_20-21-31` (MP4 default preset). The
+   screen shows "Window size (VulkanMod)" greyed; the log says `as BGRA_TOP_DOWN` or `RGBA_TOP_DOWN`;
+   no crash; no repeated "Terrain still building" warnings; the overlay shows progress. The MP4 is
+   upright, colours right, HUD present, first frame matches the replay, chunks complete. Note the
+   total time.
+2. One MKV lossless export (colours right).
+3. Then the Wave 9 list: commands not red, the practice map's pack in the replay, seek after
+   placing blocks and a torch, FOV/sprint/zoom, prediction on a server (blocks, crystals, anchors), no
+   dismount prompt, server UI after a seek, BetterHitreg hit sound once or twice.
 
-Then: BetterHitreg rule, ok_zoomer HUD hiding, VulkanMod export issues from step 9.
+Then: BetterHitreg rule, ok_zoomer HUD hiding, anything the export shows.

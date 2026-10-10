@@ -678,6 +678,19 @@ LWJGL **OpenAL** is fine to call directly - VulkanMod only replaces the graphics
 
 ## The constraint that shapes the rendering: VulkanMod
 
+**Export under VulkanMod (Wave 10, from VulkanMod 0.6.8 bytecode).** Blaze3D alone is not enough there.
+The main target is the current swapchain image; sampling it from our own render pass makes
+`VulkanImage.readOnlyLayout` record its barrier in a separate upload command buffer submitted before
+the frame (wrong old layouts: `VK_ERROR_DEVICE_LOST` on Intel, seen in game); and
+`copyTextureToBuffer` runs in its own one-shot submit before the frame's draws. So `export/VulkanMod`
+(reflection only, no compile dependency) does what VulkanMod's own `ScreenshotUtil` does: call
+`Renderer.flushCmds()` before the copy, then reset `Renderer.boundPipelineHandle` (the flush opens a
+fresh command buffer without clearing that cache). Export there never uses NV12; it reads RGBA or BGRA
+(swapchain format 44) top-down with no CPU flip, at the window size rounded down to even (VulkanMod
+ignores the panorama-style resize; the export screen shows the size, not editable), skips the preview
+capture (`copyTextureToTexture` is a no-op), and judges terrain with VulkanMod's own
+`graphNeedsUpdate` and task dispatcher, since it replaces vanilla terrain setup.
+
 VulkanMod (0.6.3 supports 1.21.11, LGPL-3.0) replaces Minecraft's GL backend. Any mod making direct
 OpenGL calls is guaranteed broken under it. Minecraft 1.21.6+ introduced the `GpuDevice` /
 `CommandEncoder` abstraction in `com.mojang.blaze3d` precisely to hide the backend.
