@@ -121,7 +121,9 @@ recording.momenton (zip)
                      micSampleRate (all null in older files or without a mic), mods (id and
                      version of each top-level mod, minus builtins, Fabric API modules, Fabric
                      Loader and Momenton) and resourcePacks (enabled ids bottom to top, server
-                     packs left out) at record start (null in older files, which never warn);
+                     packs left out) at record start (null in older files, which never warn),
+                     and player (UUID and name the server assigned the recorder; playback
+                     builds the replayed player from it, the viewer's own profile when null);
                      the replay browser compares them with the running game
                      (format/ReplayDependencies) and shows a warning line with a details tooltip,
                      never blocking Play
@@ -185,8 +187,9 @@ recording begins mid-session and without it there is no initial world to replay 
 
 **A snapshot is a list of packets, not a bespoke format:** a `GameJoinS2CPacket` rebuilt from the
 live world, then `INITIAL_CHUNKS_COMING`, the world time, the player's position, the chunk-map
-recentre, every loaded chunk nearest-first, a spawn plus tracked data per entity, and the player's
-inventory (`InventoryS2CPacket` on sync id 0). Framing is `[varint length][packet]`, the same as
+recentre, every loaded chunk nearest-first, the whole tab list (`PlayerListS2CPacket`, every entry, before any
+spawn), a spawn plus tracked data per entity, and the player's inventory (`InventoryS2CPacket` on
+sync id 0). Framing is `[varint length][packet]`, the same as
 `setup.bin`. Leading with the join is what makes a snapshot a complete rebuild rather than a patch,
 so seeking never has to undo anything. Only the first load applies the join; a later seek keeps the
 connection and the `ClientWorld` and clears the world in place instead (see Phase 2).
@@ -1187,6 +1190,14 @@ Rules discovered while building. Each one cost a failed run or a wrong fix; do n
   present. Ask what the client must have been told first, and add the ordering check to `tools/Setup`.
 - The client holds more chunks than it renders; scan `max(2, viewDistance) + 3`.
 - Every change-gated tracker resets at a chunk boundary, or a seek resolves nothing.
+- The tab list is world state too. `ClientPlayNetworkHandler.createEntity` drops a player spawn with
+  no `PlayerListEntry` ("Server attempted to add player prior to sending player info") and
+  `AbstractClientPlayerEntity.getSkin` falls back to Steve/Alex without one, so a snapshot without it
+  lost every other player, Carpet bots and the recorder's own skin and cape. The snapshot sends it
+  before the spawns; `PlayerListS2CPacket` has no entry-list constructor, so `entries` is set
+  through `PlayerListS2CPacketAccessor`.
+- The replayed player must carry the recorded profile, not the viewer's: skins are looked up by UUID,
+  and the dev username (so the UUID) changes on every launch.
 - `frames.bin` and `ENTITY_MOVE` cross-check offline: in first person a frame stamped tick T matches
   `lerp(pose[T-2], pose[T-1])` (`tools/Motion`, offset 0).
 

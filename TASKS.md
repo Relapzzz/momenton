@@ -57,10 +57,10 @@ Written but unobserved work goes in **Not yet verified**.
 ## Current state
 
 - Phases 0-2 complete and observed. Phases 3-7 written; much of it observed in five in-game runs on
-  2026-10-10 (see below). Waves 0-6 merged on `main`.
-- Last build (2026-10-10, after Wave 6): `./gradlew build --offline --rerun-tasks` green, 93 tests, 0
+  2026-10-10 (see below). Waves 0-7 merged on `main`.
+- Last build (2026-10-10, after Wave 7): `./gradlew build --offline --rerun-tasks` green, 93 tests, 0
   skipped, 0 failed; `checkReplay` ALL PASS (Inspect, Setup, Motion, Swing, Boundary) on
-  `2026-10-10_09-42-39`; 33 client mixins; no OpenGL imports.
+  `2026-10-10_09-42-39`; 34 client mixins; no OpenGL imports. All agent worktrees removed.
 - Last observed export (fifth run): 1080p60 Quick Sync, 7938 frames in 142 s (57 fps, about real
   time), plays correctly. Per frame: render ~7 ms, copy ~42 ms off-thread on 4 threads at ~470 MB/s
   aggregate (reading GPU-mapped memory is the limit). Wave 6 then added GPU NV12 conversion (3.1 MB
@@ -70,6 +70,22 @@ Written but unobserved work goes in **Not yet verified**.
   back; mic track; the main test file) and `2026-10-10_09-02-53.momenton` (1596 ticks; Nether at
   1142 and back at 1482; its mic entry predates `4d582d2`, so the offline tools reject it - re-zip a
   copy to check it). Exports land in `run/momenton/exports/`.
+
+### Wave 7 (merged, unverified): players and skins
+
+The sixth run (user's own instance, VulkanMod and their mod set) found: no other players on servers,
+no Carpet/HeroBot fake players in singleplayer, and the recorder shown as Steve/Alex without cape, in
+game and in the inventory. One root cause, proven in bytecode and in the recording (zero `ADD_PLAYER`
+in `2026-10-10_09-42-39`): the tab list arrived before F9 and was never in a snapshot.
+`ClientPlayNetworkHandler.createEntity` drops a player spawn with no `PlayerListEntry`, and
+`AbstractClientPlayerEntity.getSkin` falls back to `DefaultSkinHelper` without one.
+
+- `dad5b9e`: `WorldSnapshot` sends one `PlayerListS2CPacket` with every tab entry (profile with skin
+  textures, game mode, listed, latency, display name, hat, order) before any spawn; entries set via
+  the new `PlayerListS2CPacketAccessor`. `tools/Setup` checks it on recordings that have `player`.
+- `02cc001`: metadata `player` (server-assigned UUID and name); playback builds the replayed player
+  from it instead of the viewer's profile (dev usernames change every launch, so the UUID never
+  matched). Old recordings fall back to the viewer and keep the bug: record a new one to test.
 
 ### Wave 6 (merged, unverified)
 
@@ -103,6 +119,8 @@ Written but unobserved work goes in **Not yet verified**.
   3 s after the last frame, plays correctly; progress overlay and background finish did not hang.
 - Dying mobs no longer shake in exports (simulation distance fix `c0abdad`/`ecace64`).
 - ffmpeg discovered from the winget install.
+- Runs under VulkanMod alongside the user's own mod set (user report, sixth run); export details
+  under VulkanMod not yet reported.
 
 ## Not yet verified
 
@@ -124,7 +142,8 @@ Written but unobserved work goes in **Not yet verified**.
 - **Older items:** swing restarts in bursts, paused replay freezes everything without shake, leaving
   playback by Disconnect/closing the window, third person and crouch, custom payload filter (needs a
   server channel no mod claims), recording HUD indicator over an open screen.
-- **VulkanMod 0.6.3:** never tried (NV12 shader translation and readback are the risks).
+- **Wave 7:** players, Carpet bots, own skin and cape in a new recording; tab list after a seek.
+- **VulkanMod:** launch and use reported fine; NV12 export upright with right colours unchecked.
 
 ## Known issues
 
@@ -154,7 +173,8 @@ Written but unobserved work goes in **Not yet verified**.
   spear jabs dip (new recordings carry the reset events).
 - Render distance is a capture-time decision; view bobbing on the driven player is unchecked;
   sprinting is recorded but not applied; the driven player is never `onGround`.
-- The tab list is not in the snapshot; `shouldTickTimeOfDay` is private (up to 1 s time drift); the
+- Tab entries added after a snapshot survive a backward seek past it (tab list only, harmless);
+  `shouldTickTimeOfDay` is private (up to 1 s time drift); the
   rebuilt join keeps the original `seed` and `isFlat`; the `local = false` registry flag in
   `OfflineConnection` is unresolved; pause-menu frames are recorded as ordinary frames.
 - Snapshot-boundary race residue: a packet whose stamp is read just before the boundary drain but
@@ -241,41 +261,23 @@ Complete, observed.
 
 ## Next session
 
-The user runs this pass with `gradlew runClient` (a new terminal after `gradlew --stop`) and reports
-each step as pass or fail; on a failure, `run/logs/latest.log` (or the archived `run/logs/*.log.gz` of
-that game session) and `run/momenton/export.log`.
+The user runs this pass with `gradlew runClient` or their own instance (copy
+`build/libs/momenton-1.0.0.jar`) and reports each step as pass or fail; on a failure,
+`logs/latest.log` (search "prior to sending player info") and `momenton/export.log`.
 
-1. Launch: no mixin error (33 client mixins).
-2. **NV12 export speed.** Export `2026-10-10_09-42-39` at 1920x1080 60 fps, "MP4, hardware (Intel
-   Quick Sync)". The log says `as NV12` with no "NV12 conversion shader" warning. Send back the
-   `Export N%` lines and `Delivered ... in ... s` (last time 142 s, 57 fps; expect clearly faster).
-3. **NV12 picture.** Upright; no stripes or shifted colours in the bottom third; HUD, inventory and text
-   edges clean; colours match the game (slightly different from the previous export, which was
-   BT.601). Mobs still die without shaking.
-4. **Commentary.** VLC shows two audio tracks, "Game" and "Commentary"; the voice is in sync at the
-   start and the end. Voice 0% leaves only Game; game 0% leaves only Commentary; "Mixed in" gives one
-   track "Game and commentary".
-5. **Presets.** One short export each: MP4 default (x264), custom bitrate, potato, WebM (Opus audio),
-   MKV lossless (log says `as RGBA`). Each plays. 1366x768 says `as RGBA` and is upright.
-6. **Cancel.** Esc mid-render: the window stays responsive, sound comes back, and within a second no
-   `momenton-video-*`, `momenton-audio-*.pcm` or `momenton-mic-*.pcm` is left in `run/momenton/exports`;
-   Task Manager shows no ffmpeg.exe. Then Cancel on the "Finishing video" screen: same.
-7. **Failure screen.** Change `libx264` to `nosuchcodec` in the arguments: the failure screen shows the
-   log; Back keeps the values.
-8. **Edited export.** In the editor split the recording into three clips, reorder, trim two, export:
-   one video of the summed length, clean cuts, commentary in sync across cuts.
-9. **Editor.** Undo all, redo, Ctrl+S, close and reopen (restored); `<` `>` move one tick; HUD toggles
-   hide immediately and persist; replayed inventory/chest/chat show under the timeline at the right
-   moments; O on a replay opened with Play opens the editor.
-10. **Browser and settings.** Select a recording: no warning line. Enable or reorder a resource pack:
-    yellow "Recorded with different resource packs" with a tooltip. Settings: commentary on/off, pick
-    a microphone, the meter moves when you speak; the setting survives a restart.
-11. **New survival recording** with the mic on: break and place blocks, slow mining with one cancel,
-    eat, open a chest and move items with a shift-click, type chat without sending then send, a
-    portal, lava, a boat and a horse. Replay it: nothing heard twice, chest moves and chat text right,
-    voice in sync after `[`, `]`, `P`, warp and fire overlay on time, vehicle carries the rider.
-12. Optional: one run under VulkanMod 0.6.3 (no Iris): launch, replay, NV12 export upright with
-    correct colours.
+1. Launch: no mixin error (34 client mixins).
+2. **Players (Wave 7).** Make a NEW recording (old ones lack `player` and still show Steve): on a
+   server with other players already online when F9 is pressed, and one who joins during it. Replay:
+   every player visible with skin and cape, no "prior to sending player info" in the log.
+3. **Carpet / HeroBot.** In singleplayer spawn a bot, then F9, then spawn a second: both visible in the
+   replay with their skins.
+4. **Own skin.** The replayed player and the inventory model show your skin and cape, in first person,
+   third person and front view. Seek backward once and check again.
+5. Then send `./gradlew checkReplay` output for that recording (the new tab-list check runs on it).
+6. Remaining steps from the previous pass that were not reported: NV12 export speed and picture,
+   commentary tracks, presets, cancel, failure screen, edited export, editor, browser and settings,
+   survival recording (see `IMPLEMENTATION_PLAN.md` and Not yet verified for what each checks).
+7. Under VulkanMod: one NV12 export, upright with correct colours.
 
 After the pass: fix what fails (root cause first), tick what passed, then Phase 8 hardening and the
 phase gates.
