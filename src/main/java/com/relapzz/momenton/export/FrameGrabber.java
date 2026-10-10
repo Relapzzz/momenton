@@ -17,7 +17,7 @@ public final class FrameGrabber implements AutoCloseable {
 
 	public FrameGrabber(int width, int height) {
 		for (int i = 0; i < BUFFERS; i++) {
-			free.add(RenderSystem.getDevice().createBuffer(() -> "Momenton frame grab", GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_COPY_DST, (long) width * height * 4));
+			free.add(RenderSystem.getDevice().createBuffer(() -> "Momenton frame grab", GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_HINT_CLIENT_STORAGE | GpuBuffer.USAGE_COPY_DST, (long) width * height * 4));
 		}
 	}
 
