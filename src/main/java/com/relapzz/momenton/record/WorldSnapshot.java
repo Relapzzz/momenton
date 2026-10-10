@@ -78,6 +78,7 @@ final class WorldSnapshot {
 
 		addChunks(client, world, player, packets);
 		packets.add(playerList(client.getNetworkHandler()));
+		ServerStateSnapshot.capture(client, packets);
 		addEntities(world, player, packets);
 		return packets;
 	}
