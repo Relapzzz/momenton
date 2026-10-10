@@ -30,6 +30,7 @@ import net.minecraft.network.packet.s2c.play.CommonPlayerSpawnInfo;
 import net.minecraft.network.packet.s2c.play.EntitiesDestroyS2CPacket;
 import net.minecraft.network.packet.s2c.play.GameJoinS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlayerRespawnS2CPacket;
+import net.minecraft.network.packet.s2c.play.SimulationDistanceS2CPacket;
 import net.minecraft.network.packet.s2c.play.UnloadChunkS2CPacket;
 import net.minecraft.network.state.ConfigurationStates;
 import net.minecraft.network.state.PlayStateFactories;
@@ -102,10 +103,15 @@ public final class OfflineConnection {
 		while (in.available() > 0) {
 			packets.add(play.decode(Unpooled.wrappedBuffer(in.readNBytes(ActionCodec.readVarInt(in)))));
 		}
+		GameJoinS2CPacket join = (GameJoinS2CPacket) packets.getFirst();
 		if (client.world != null) {
-			reuseWorld((GameJoinS2CPacket) packets.removeFirst(), packets);
+			packets.removeFirst();
+			reuseWorld(join, packets);
 		}
 		packets.forEach(this::feed);
+		if (join.simulationDistance() == 0) {
+			feed(new SimulationDistanceS2CPacket(Math.max(2, client.options.getSimulationDistance().getValue())));
+		}
 	}
 
 	private void reuseWorld(GameJoinS2CPacket join, List<Packet<? super ClientPlayPacketListener>> snapshot) {

@@ -1096,6 +1096,13 @@ Rules discovered while building. Each one cost a failed run or a wrong fix; do n
   the last frame's progress as well.
 - Borrowing vanilla's pause flag freezes entities, block entities, particles, the HUD tick and the
   interaction manager in one move; fixing one animation at a time would not.
+- A singleplayer join carries simulation distance 0: the integrated server only sends the real value
+  (`max(2, options.simulationDistance)`) in a `SimulationDistanceS2CPacket` on its first tick, before
+  any recording starts. With 0, `ClientWorld.shouldUpdatePostDeath` is false for every corpse outside
+  the viewer's chunk, so `deathTime` stops while the renderer still draws `deathTime + tickProgress`:
+  the corpse tilts forward within each tick and snaps back at every tick boundary. It was reported
+  from an export, but the export clock is not involved; `tools/Deaths` lists the affected deaths.
+  `OfflineConnection.applySnapshot` feeds that packet after a join that says 0.
 
 **Driving the replayed player**
 - Where a value is applied is as load-bearing as its value; most Phase 3 defects were a value applied
