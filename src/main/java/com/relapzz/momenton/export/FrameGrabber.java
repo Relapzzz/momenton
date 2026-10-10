@@ -89,7 +89,7 @@ final class FrameGrabber implements AutoCloseable {
 	boolean grab(Framebuffer framebuffer, Function<ByteBuffer, CompletableFuture<?>> sink) {
 		reclaim();
 		GpuTexture source = framebuffer.getColorAttachment();
-		if ((source.getWidth(0) & ~1) != width || (source.getHeight(0) & ~1) != height) {
+		if (VulkanMod.LOADED && ((source.getWidth(0) & ~1) != width || (source.getHeight(0) & ~1) != height)) {
 			return false;
 		}
 		GpuBuffer buffer = free.poll();
