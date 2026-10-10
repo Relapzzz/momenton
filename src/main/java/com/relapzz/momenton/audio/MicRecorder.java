@@ -13,6 +13,8 @@ import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 
 public final class MicRecorder {
+	public static final String ENTRY = "audio/mic.wav";
+
 	private static final double NANOS_PER_TICK = 50_000_000.0;
 	private static final int CHUNK_BYTES = WavWriter.SAMPLE_RATE / 50 * WavWriter.FRAME_BYTES;
 
@@ -51,14 +53,6 @@ public final class MicRecorder {
 	@Nullable
 	public Double await() {
 		return startTick.join();
-	}
-
-	public void attachTo(Path replay) {
-		try {
-			MicTrack.attach(file, replay);
-		} catch (IOException e) {
-			Momenton.LOGGER.error("Could not add the microphone track to {}, it is left at {}", replay, file, e);
-		}
 	}
 
 	@Nullable

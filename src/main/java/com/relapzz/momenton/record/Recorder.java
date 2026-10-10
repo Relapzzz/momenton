@@ -37,6 +37,7 @@ import org.jetbrains.annotations.Nullable;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -204,7 +205,9 @@ public final class Recorder {
 			recorder = new Recorder(client, handler, root.resolve("." + name + ".staging"), root.resolve(name + ".momenton"));
 			recorder.begin(join);
 			double nextFrameTick = 1 + client.getRenderTickCounter().getTickProgress(false);
-			recorder.mic = MicRecorder.start(root.resolve("." + name + ".mic.wav"), nextFrameTick);
+			Path micFile = recorder.staging.resolve(MicRecorder.ENTRY);
+			Files.createDirectories(micFile.getParent());
+			recorder.mic = MicRecorder.start(micFile, nextFrameTick);
 		} catch (IOException e) {
 			Momenton.LOGGER.error("Could not start recording", e);
 			notify(client, "Could not start recording, see the log");
@@ -528,10 +531,10 @@ public final class Recorder {
 				Momenton.LOGGER.warn("Finalising the recording from the {} ticks written before it failed", durationTicks);
 			}
 			try {
-				writer.finish(durationTicks, chunks -> metadata(durationTicks, framesRendered, chunks, micStartTick), output);
-				if (micStartTick != null) {
-					mic.attachTo(output);
+				if (micStartTick == null) {
+					Files.deleteIfExists(staging.resolve(MicRecorder.ENTRY));
 				}
+				writer.finish(durationTicks, chunks -> metadata(durationTicks, framesRendered, chunks, micStartTick), output);
 				Momenton.LOGGER.info("Recorded {} ticks and {} frames to {}", durationTicks, framesRendered, output);
 				client.execute(() -> notify(client, "Recording saved: " + output.getFileName()));
 			} catch (IOException e) {

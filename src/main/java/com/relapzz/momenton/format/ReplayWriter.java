@@ -1,7 +1,9 @@
 package com.relapzz.momenton.format;
 
 import java.io.BufferedOutputStream;
+import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -11,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
+import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -99,15 +102,31 @@ public final class ReplayWriter {
 			zip.write(metadataFactory.create(chunks).toJson().getBytes(StandardCharsets.UTF_8));
 			zip.closeEntry();
 
-			try (Stream<Path> parts = Files.list(staging)) {
-				for (Path part : parts.sorted(Comparator.comparing(Path::getFileName)).toList()) {
-					zip.putNextEntry(new ZipEntry(part.getFileName().toString()));
+			try (Stream<Path> parts = Files.walk(staging)) {
+				for (Path part : parts.filter(Files::isRegularFile).sorted().toList()) {
+					String name = staging.relativize(part).toString().replace(File.separatorChar, '/');
+					zip.putNextEntry(name.endsWith(".wav") ? stored(name, part) : new ZipEntry(name));
 					Files.copy(part, zip);
 					zip.closeEntry();
 				}
 			}
 		}
 		deleteStaging();
+	}
+
+	private static ZipEntry stored(String name, Path part) throws IOException {
+		CRC32 crc = new CRC32();
+		try (InputStream in = Files.newInputStream(part)) {
+			byte[] buffer = new byte[1 << 16];
+			for (int read = in.read(buffer); read > 0; read = in.read(buffer)) {
+				crc.update(buffer, 0, read);
+			}
+		}
+		ZipEntry entry = new ZipEntry(name);
+		entry.setMethod(ZipEntry.STORED);
+		entry.setSize(Files.size(part));
+		entry.setCrc(crc.getValue());
+		return entry;
 	}
 
 	/** Supplies the metadata once the chunk index is final. */

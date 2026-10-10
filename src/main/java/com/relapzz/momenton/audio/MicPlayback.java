@@ -88,9 +88,9 @@ public final class MicPlayback {
 	private void run() {
 		AudioFormat format = WavWriter.format(sampleRate);
 		try (ZipFile zip = new ZipFile(file.toFile()); SourceDataLine line = AudioSystem.getSourceDataLine(format)) {
-			ZipEntry entry = zip.getEntry(MicTrack.ENTRY);
+			ZipEntry entry = zip.getEntry(MicRecorder.ENTRY);
 			if (entry == null) {
-				Momenton.LOGGER.warn("{} lists a microphone track but has no {}", file, MicTrack.ENTRY);
+				Momenton.LOGGER.warn("{} lists a microphone track but has no {}", file, MicRecorder.ENTRY);
 				return;
 			}
 			long samples = (entry.getSize() - WavWriter.HEADER_BYTES) / WavWriter.FRAME_BYTES;

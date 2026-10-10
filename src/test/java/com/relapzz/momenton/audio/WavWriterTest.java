@@ -1,5 +1,7 @@
 package com.relapzz.momenton.audio;
 
+import com.relapzz.momenton.format.ReplayMetadata;
+import com.relapzz.momenton.format.ReplayWriter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -14,9 +16,10 @@ import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
-import java.util.zip.ZipOutputStream;
+import java.util.zip.ZipInputStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -60,27 +63,29 @@ class WavWriterTest {
 	}
 
 	@Test
-	void attachesStoredUnderAudio(@TempDir Path dir) throws IOException {
-		Path replay = dir.resolve("test.momenton");
-		try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(replay))) {
-			zip.putNextEntry(new ZipEntry("metadata.json"));
-			zip.write("{}".getBytes());
-			zip.closeEntry();
-		}
-		Path wav = dir.resolve(".test.mic.wav");
+	void stagedTrackIsStoredWithoutDataDescriptor(@TempDir Path dir) throws IOException {
+		Path staging = dir.resolve("staging");
+		ReplayWriter writer = new ReplayWriter(staging, 0);
+		Path wav = staging.resolve(MicRecorder.ENTRY);
+		Files.createDirectories(wav.getParent());
 		byte[] pcm = pcm(4800);
-		try (WavWriter writer = new WavWriter(wav)) {
-			writer.write(pcm, pcm.length);
+		try (WavWriter out = new WavWriter(wav)) {
+			out.write(pcm, pcm.length);
 		}
 		byte[] expected = Files.readAllBytes(wav);
+		Path replay = dir.resolve("test.momenton");
 
-		MicTrack.attach(wav, replay);
+		writer.finish(1, chunks -> new ReplayMetadata(ReplayMetadata.FORMAT_VERSION, "1.21.11", "1.0.0", 0L, 1, 0L,
+				ReplayWriter.CHUNK_TICKS, "Test World", "minecraft:overworld", chunks, List.of(), 1920, 1080, 3), replay);
 
-		assertFalse(Files.exists(wav));
+		try (ZipInputStream stream = new ZipInputStream(Files.newInputStream(replay))) {
+			for (ZipEntry entry = stream.getNextEntry(); entry != null; entry = stream.getNextEntry()) {
+				stream.readAllBytes();
+			}
+		}
 		try (ZipFile zip = new ZipFile(replay.toFile())) {
-			ZipEntry entry = zip.getEntry(MicTrack.ENTRY);
+			ZipEntry entry = zip.getEntry(MicRecorder.ENTRY);
 			assertEquals(ZipEntry.STORED, entry.getMethod());
-			assertArrayEquals("{}".getBytes(), zip.getInputStream(zip.getEntry("metadata.json")).readAllBytes());
 			try (InputStream in = zip.getInputStream(entry)) {
 				assertArrayEquals(expected, in.readAllBytes());
 			}
@@ -90,7 +95,6 @@ class WavWriterTest {
 			}
 		}
 	}
-
 
 	private static byte[] pcm(int samples) {
 		ByteBuffer buffer = ByteBuffer.allocate(samples * 2).order(ByteOrder.LITTLE_ENDIAN);
