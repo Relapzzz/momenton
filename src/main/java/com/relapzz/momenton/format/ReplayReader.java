@@ -63,6 +63,10 @@ public final class ReplayReader implements Closeable {
 		return zip.getEntry(String.format("snapshot_%04d.bin", index)) != null;
 	}
 
+	public InputStream serverPack(ReplayMetadata.ServerPack pack) throws IOException {
+		return open(pack.entry());
+	}
+
 	/** Actions in one chunk, seeded with that chunk's start tick so the deltas resolve. */
 	public ActionCodec.Reader chunk(ReplayMetadata.ChunkEntry entry) throws IOException {
 		return reader(String.format("chunk_%04d.bin", entry.index()), entry.startTick());

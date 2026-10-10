@@ -72,6 +72,12 @@ public final class ReplayWriter {
 		Files.write(staging.resolve(name), content);
 	}
 
+	public void copyPart(String name, Path source) throws IOException {
+		Path target = staging.resolve(name);
+		Files.createDirectories(target.getParent());
+		Files.copy(source, target);
+	}
+
 	/** Appends a block of fixed-stride frame records; {@code block} is written from 0 to its position. */
 	public void writeFrames(ByteBuffer block) throws IOException {
 		frameOut.write(block.array(), 0, block.position());
@@ -105,7 +111,7 @@ public final class ReplayWriter {
 			try (Stream<Path> parts = Files.walk(staging)) {
 				for (Path part : parts.filter(Files::isRegularFile).sorted().toList()) {
 					String name = staging.relativize(part).toString().replace(File.separatorChar, '/');
-					zip.putNextEntry(name.endsWith(".wav") ? stored(name, part) : new ZipEntry(name));
+					zip.putNextEntry(name.endsWith(".wav") || name.endsWith(".zip") ? stored(name, part) : new ZipEntry(name));
 					Files.copy(part, zip);
 					zip.closeEntry();
 				}

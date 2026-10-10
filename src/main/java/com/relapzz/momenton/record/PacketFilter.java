@@ -3,6 +3,8 @@ package com.relapzz.momenton.record;
 import net.minecraft.network.packet.Packet;
 import net.minecraft.network.packet.UnknownCustomPayload;
 import net.minecraft.network.packet.s2c.common.CustomPayloadS2CPacket;
+import net.minecraft.network.packet.s2c.common.ResourcePackRemoveS2CPacket;
+import net.minecraft.network.packet.s2c.common.ResourcePackSendS2CPacket;
 import net.minecraft.network.packet.s2c.play.ChatMessageS2CPacket;
 import net.minecraft.network.packet.s2c.play.GameMessageS2CPacket;
 import net.minecraft.text.Text;
@@ -34,6 +36,10 @@ final class PacketFilter {
 		// A payload for a channel no mod claimed decodes to UnknownCustomPayload, which keeps the
 		// id and discards the body - re-encoding it would produce a packet the replay cannot read.
 		if (packet instanceof CustomPayloadS2CPacket custom && custom.payload() instanceof UnknownCustomPayload) {
+			return null;
+		}
+
+		if (packet instanceof ResourcePackSendS2CPacket || packet instanceof ResourcePackRemoveS2CPacket) {
 			return null;
 		}
 
