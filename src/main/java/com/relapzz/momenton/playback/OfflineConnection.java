@@ -116,6 +116,8 @@ public final class OfflineConnection {
 		if (join.simulationDistance() == 0) {
 			feed(new SimulationDistanceS2CPacket(Math.max(2, client.options.getSimulationDistance().getValue())));
 		}
+		client.inGameHud.setOverlayMessage(null, false);
+		client.inGameHud.clearTitle();
 	}
 
 	private void reuseWorld(GameJoinS2CPacket join, List<Packet<? super ClientPlayPacketListener>> snapshot) {

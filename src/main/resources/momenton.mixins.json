@@ -42,6 +42,7 @@
 		"client.playback.ClientPlayerEntityTailMixin",
 		"client.playback.ClientWorldMixin",
 		"client.playback.EditorHostMixin",
+		"client.playback.FovMixin",
 		"client.playback.HostedChatFocusMixin",
 		"client.playback.MinecraftClientMixin",
 		"client.playback.MouseMixin",

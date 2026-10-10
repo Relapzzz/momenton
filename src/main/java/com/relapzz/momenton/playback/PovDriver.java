@@ -68,6 +68,12 @@ public final class PovDriver {
 		return current.sample(tick, tickProgress);
 	}
 
+	public static float fov(float tickProgress, float fov) {
+		FrameTrack current = track;
+		FrameTrack.Pose pose = current == null ? null : current.sample(tick, frozen ? heldProgress : tickProgress);
+		return pose == null ? fov : pose.fov();
+	}
+
 	@Nullable
 	public static FrameTrack.Pose screenCursor(@Nullable Screen screen, float tickProgress) {
 		FrameTrack current = track;
