@@ -54,6 +54,7 @@ public final class FfmpegProcess implements AutoCloseable {
 	private static final long STALL_NANOS = TimeUnit.SECONDS.toNanos(60);
 
 	private final Process process;
+	private final FrameFormat format;
 	private final int frameBytes;
 	private final int stride;
 	private final int rows;
@@ -69,11 +70,12 @@ public final class FfmpegProcess implements AutoCloseable {
 	private volatile long progressed = System.nanoTime();
 	private long waited;
 
-	private FfmpegProcess(Process process, int width, int height, BufferedWriter logFile, String header) {
+	private FfmpegProcess(Process process, FrameFormat format, int width, int height, BufferedWriter logFile, String header) {
 		this.process = process;
-		this.frameBytes = width * height * 4;
-		this.stride = width * 4;
-		this.rows = height;
+		this.format = format;
+		this.frameBytes = format.bytes(width, height);
+		this.stride = format.stride(width);
+		this.rows = format.rows(height);
 		this.logFile = logFile;
 		log.append(header);
 		for (int i = 0; i < QUEUED_FRAMES; i++) {
@@ -171,16 +173,16 @@ public final class FfmpegProcess implements AutoCloseable {
 				.toArray();
 	}
 
-	public static FfmpegProcess start(String command, String args, int width, int height, int fps, int bitrate, Path output) throws IOException {
-		return start(command, args, width, height, fps, bitrate, output, logPath());
+	static FfmpegProcess start(String command, String args, FrameFormat format, int width, int height, int fps, int bitrate, Path output) throws IOException {
+		return start(command, args, format, width, height, fps, bitrate, output, logPath());
 	}
 
-	static FfmpegProcess start(String command, String args, int width, int height, int fps, int bitrate, Path output, Path logPath) throws IOException {
+	static FfmpegProcess start(String command, String args, FrameFormat format, int width, int height, int fps, int bitrate, Path output, Path logPath) throws IOException {
 		Path folder = output.toAbsolutePath().getParent();
 		List<String> commandLine = new ArrayList<>();
 		commandLine.add(command);
 		try {
-			commandLine.addAll(split(substitute(args, width, height, fps, bitrate, output.getFileName().toString())));
+			commandLine.addAll(split(substitute(format.expand(args), width, height, fps, bitrate, output.getFileName().toString())));
 		} catch (IllegalArgumentException e) {
 			throw new StartupException(e.getMessage());
 		}
@@ -197,7 +199,7 @@ public final class FfmpegProcess implements AutoCloseable {
 			logFile.close();
 			throw new NotFoundException(command, e);
 		}
-		return new FfmpegProcess(process, width, height, logFile, header);
+		return new FfmpegProcess(process, format, width, height, logFile, header);
 	}
 
 	private static String header(List<String> commandLine) {
@@ -209,8 +211,7 @@ public final class FfmpegProcess implements AutoCloseable {
 				.replace("%HEIGHT%", String.valueOf(height))
 				.replace("%FPS%", String.valueOf(fps))
 				.replace("%FILENAME%", fileName)
-				.replace("%BITRATE%", String.valueOf(bitrate))
-				.replace("%FILTERS%", "");
+				.replace("%BITRATE%", String.valueOf(bitrate));
 	}
 
 	public static List<String> split(String args) {
@@ -322,9 +323,9 @@ public final class FfmpegProcess implements AutoCloseable {
 		return FabricLoader.getInstance().getGameDir().resolve("momenton").resolve("export.log");
 	}
 
-	public CompletableFuture<Void> writeFrame(ByteBuffer bottomUp) throws IOException {
-		if (bottomUp.remaining() != frameBytes) {
-			throw new IllegalArgumentException("Expected " + frameBytes + " bytes, got " + bottomUp.remaining());
+	public CompletableFuture<Void> writeFrame(ByteBuffer source) throws IOException {
+		if (source.remaining() != frameBytes) {
+			throw new IllegalArgumentException("Expected " + frameBytes + " bytes, got " + source.remaining());
 		}
 		try {
 			if (failure != null) {
@@ -337,7 +338,7 @@ public final class FfmpegProcess implements AutoCloseable {
 			for (int i = 0; i < COPY_THREADS; i++) {
 				int from = rows * i / COPY_THREADS;
 				int to = rows * (i + 1) / COPY_THREADS;
-				parts[i] = CompletableFuture.runAsync(() -> flip(bottomUp, frame, from, to), copiers);
+				parts[i] = CompletableFuture.runAsync(() -> copy(source, frame, from, to), copiers);
 			}
 			CompletableFuture<Void> copied = CompletableFuture.allOf(parts);
 			queued.put(new Frame(frame, copied));
@@ -348,10 +349,14 @@ public final class FfmpegProcess implements AutoCloseable {
 		}
 	}
 
-	private void flip(ByteBuffer bottomUp, byte[] frame, int from, int to) {
-		int base = bottomUp.position();
+	private void copy(ByteBuffer source, byte[] frame, int from, int to) {
+		int base = source.position();
+		if (format == FrameFormat.NV12) {
+			source.get(base + from * stride, frame, from * stride, (to - from) * stride);
+			return;
+		}
 		for (int y = from; y < to; y++) {
-			bottomUp.get(base + (rows - 1 - y) * stride, frame, y * stride, stride);
+			source.get(base + (rows - 1 - y) * stride, frame, y * stride, stride);
 		}
 	}
 

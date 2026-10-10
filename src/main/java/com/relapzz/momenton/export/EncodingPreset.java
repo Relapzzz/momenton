@@ -14,8 +14,6 @@ public enum EncodingPreset {
 	WEBM_CUSTOM("-an -c:v libvpx -b:v %BITRATE% -pix_fmt yuv420p", "webm", false),
 	MKV_LOSSLESS("-an -c:v libx264 -preset ultrafast -qp 0", "mkv", false);
 
-	private static final String INPUT = "-y -f rawvideo -pix_fmt rgba -s %WIDTH%x%HEIGHT% -r %FPS% -i - %FILTERS%";
-
 	private final String codec;
 	private final String extension;
 	private final boolean hardware;
@@ -31,7 +29,8 @@ public enum EncodingPreset {
 	}
 
 	public String arguments() {
-		return INPUT + codec + " \"%FILENAME%\"";
+		String input = this == MKV_LOSSLESS ? FrameFormat.RGBA.input() : FrameFormat.PLACEHOLDER;
+		return "-y " + input + " " + codec + " \"%FILENAME%\"";
 	}
 
 	public String codec() {
