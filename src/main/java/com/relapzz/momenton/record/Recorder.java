@@ -1,6 +1,8 @@
 package com.relapzz.momenton.record;
 
 import com.relapzz.momenton.Momenton;
+import com.relapzz.momenton.audio.MicRecorder;
+import com.relapzz.momenton.audio.WavWriter;
 import com.relapzz.momenton.format.ActionCodec;
 import com.relapzz.momenton.format.FrameTrack;
 import com.relapzz.momenton.format.ReplayMetadata;
@@ -90,6 +92,7 @@ public final class Recorder {
 	private volatile boolean failed;
 	private boolean encodeErrorLogged;
 	private int writtenTicks;
+	private MicRecorder mic;
 
 	/** The session join, replayed at the head of every snapshot so a seek rebuilds the world. */
 	private GameJoinS2CPacket join;
@@ -200,6 +203,8 @@ public final class Recorder {
 		try {
 			recorder = new Recorder(client, handler, root.resolve("." + name + ".staging"), root.resolve(name + ".momenton"));
 			recorder.begin(join);
+			double nextFrameTick = 1 + client.getRenderTickCounter().getTickProgress(false);
+			recorder.mic = MicRecorder.start(root.resolve("." + name + ".mic.wav"), nextFrameTick);
 		} catch (IOException e) {
 			Momenton.LOGGER.error("Could not start recording", e);
 			notify(client, "Could not start recording, see the log");
@@ -506,6 +511,9 @@ public final class Recorder {
 		active = null;
 
 		frames.close();
+		if (mic != null) {
+			mic.stop();
+		}
 
 		// Packets keep arriving between the last recorded tick and the keypress. They belong to the
 		// last tick, not to a tick that never happened - otherwise the final chunk holds an action
@@ -515,11 +523,15 @@ public final class Recorder {
 
 		io.execute(() -> {
 			int durationTicks = writtenTicks;
+			Double micStartTick = mic == null ? null : mic.await();
 			if (failed) {
 				Momenton.LOGGER.warn("Finalising the recording from the {} ticks written before it failed", durationTicks);
 			}
 			try {
-				writer.finish(durationTicks, chunks -> metadata(durationTicks, framesRendered, chunks), output);
+				writer.finish(durationTicks, chunks -> metadata(durationTicks, framesRendered, chunks, micStartTick), output);
+				if (micStartTick != null) {
+					mic.attachTo(output);
+				}
 				Momenton.LOGGER.info("Recorded {} ticks and {} frames to {}", durationTicks, framesRendered, output);
 				client.execute(() -> notify(client, "Recording saved: " + output.getFileName()));
 			} catch (IOException e) {
@@ -529,7 +541,7 @@ public final class Recorder {
 		io.shutdown();
 	}
 
-	private ReplayMetadata metadata(int durationTicks, long framesRendered, List<ReplayMetadata.ChunkEntry> chunks) {
+	private ReplayMetadata metadata(int durationTicks, long framesRendered, List<ReplayMetadata.ChunkEntry> chunks, Double micStartTick) {
 		return new ReplayMetadata(
 				ReplayMetadata.FORMAT_VERSION,
 				version("minecraft"),
@@ -544,7 +556,9 @@ public final class Recorder {
 				List.copyOf(dimensionChanges),
 				framebufferWidth,
 				framebufferHeight,
-				guiScale);
+				guiScale,
+				micStartTick,
+				micStartTick == null ? null : WavWriter.SAMPLE_RATE);
 	}
 
 	/** The save name in singleplayer, the server entry's name otherwise. Vanilla resolves it this way. */

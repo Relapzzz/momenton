@@ -29,11 +29,22 @@ public record ReplayMetadata(
 		List<DimensionChange> dimensionChanges,
 		Integer framebufferWidth,
 		Integer framebufferHeight,
-		Integer guiScale) {
+		Integer guiScale,
+		Double micStartTick,
+		Integer micSampleRate) {
 
 	public static final int FORMAT_VERSION = 2;
 
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+
+	public ReplayMetadata(int formatVersion, String minecraftVersion, String modVersion, long createdAtEpochMs,
+			int durationTicks, long framesRendered, int chunkTicks, String worldName, String initialDimension,
+			List<ChunkEntry> chunks, List<DimensionChange> dimensionChanges, Integer framebufferWidth,
+			Integer framebufferHeight, Integer guiScale) {
+		this(formatVersion, minecraftVersion, modVersion, createdAtEpochMs, durationTicks, framesRendered, chunkTicks,
+				worldName, initialDimension, chunks, dimensionChanges, framebufferWidth, framebufferHeight, guiScale,
+				null, null);
+	}
 
 	/** One {@code chunk_NNNN.bin} / {@code ui_NNNN.bin} pair, covering {@code [startTick, endTick)}. */
 	public record ChunkEntry(int index, int startTick, int endTick) {
