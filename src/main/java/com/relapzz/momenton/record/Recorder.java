@@ -5,6 +5,7 @@ import com.relapzz.momenton.audio.MicRecorder;
 import com.relapzz.momenton.audio.WavWriter;
 import com.relapzz.momenton.format.ActionCodec;
 import com.relapzz.momenton.format.FrameTrack;
+import com.relapzz.momenton.format.ReplayDependencies;
 import com.relapzz.momenton.format.ReplayMetadata;
 import com.relapzz.momenton.format.ReplayWriter;
 import com.relapzz.momenton.mixin.client.GameRendererInvoker;
@@ -84,6 +85,8 @@ public final class Recorder {
 	private final int framebufferWidth;
 	private final int framebufferHeight;
 	private final int guiScale;
+	private final List<ReplayMetadata.ModEntry> mods = ReplayDependencies.loadedMods();
+	private final List<String> resourcePacks;
 	private final Path staging;
 	private final Path output;
 	private final long startedAtEpochMs = System.currentTimeMillis();
@@ -110,6 +113,7 @@ public final class Recorder {
 		this.framebufferWidth = window.getFramebufferWidth();
 		this.framebufferHeight = window.getFramebufferHeight();
 		this.guiScale = window.getScaleFactor();
+		this.resourcePacks = ReplayDependencies.enabledResourcePacks(client);
 		this.writer = new ReplayWriter(staging, 0);
 		this.io = Executors.newSingleThreadExecutor(runnable -> new Thread(runnable, "Momenton-Writer"));
 		this.frames = new FrameTrackWriter(io, writer);
@@ -561,7 +565,9 @@ public final class Recorder {
 				framebufferHeight,
 				guiScale,
 				micStartTick,
-				micStartTick == null ? null : WavWriter.SAMPLE_RATE);
+				micStartTick == null ? null : WavWriter.SAMPLE_RATE,
+				mods,
+				resourcePacks);
 	}
 
 	/** The save name in singleplayer, the server entry's name otherwise. Vanilla resolves it this way. */
