@@ -1081,11 +1081,27 @@ and the export screen first, then three agents:
 The coordinator then wired `ExportFailedScreen` into `ExportSession` failures and moved
 `MicPlayback` onto `ReplaySession.file()` and the on-screen tick (`6bbb1be`).
 
-**Wave 6 (next, after the consolidated in-game pass):** the mic as a second audio track in export
-(offset from `micStartTick` through the clip list, per-track gain and mute in `ExportSettings`), a
-mic device picker, then Phase 8 hardening (disk full, kick and dimension change mid-recording,
-recording overhead, VulkanMod run, ffmpeg auto-download and hardware encoders, 4K60).
+**In-game fix rounds (2026-10-10, between waves).** Each user run produced single-agent fixes,
+root-caused from the logs first: the export hang at the end (unflushed GPU fences, `5525484`), the
+progress overlay and background finish, Quick Sync and timing logs, the attack dip
+(`resetTicksSince`, `d396467`), the simulation distance 0 that froze corpses (`c0abdad`, `ecace64`),
+the cancel hang (`107cc5b`) and the 4-thread off-render-thread copy (57 fps, observed).
 
+**Wave 6 (merged 2026-10-10).** The coordinator first added `gameVolume` and `micVolume` to
+`ExportSettings` (`7d0122a`). Then:
+
+| Agent | Task | Owns |
+|---|---|---|
+| NV12 | GPU RGBA-to-NV12 conversion before readback, BT.709 tags, RGBA fallback, `%INPUT%` presets, flaky tests fixed | `FrameGrabber`, `ExportSession`, `EncodingPreset`, `FfmpegProcess` (not `mux`), `FrameFormat`, `ExportTimings`, `shaders/core/nv12.fsh` |
+| Commentary | Mic as a second audio track or mixed in, per-clip alignment, volumes | `FfmpegProcess.mux`, `ExportFinisher`, `ExportScreen` |
+| Info and settings | Mods and resource packs in metadata with browser warnings; mic settings screen, device picker, level meter | `ReplayMetadata`, `ReplayDependencies`, `Recorder.metadata`, `ReplayBrowserScreen`, `MicRecorder`, `MicMeter`, `config/*`, `SettingsScreen` |
+
+Merging NV12 after Commentary broke one test that called the old `FfmpegProcess.start` (`59b9bd5`):
+always rerun the full test suite after merging agents that touched the same class.
+
+**Next:** the consolidated in-game pass in `TASKS.md`, the fixes it produces, then Phase 8
+(VulkanMod run, recording overhead, disk full / kick / dimension change mid-recording, Iris clock,
+ffmpeg auto-download, 4K60, README).
 ---
 
 ## Risks
