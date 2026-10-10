@@ -113,6 +113,16 @@ public class Setup {
 						order.indexOf("PlayPackets.PLAYER_INFO_UPDATE") >= 0
 								&& order.indexOf("PlayPackets.PLAYER_INFO_UPDATE")
 										< order.indexOf("PlayPackets.ADD_ENTITY"));
+			if (m.player() != null) {
+				check(name + " carries the world border, abilities and weather, which a server sends only at join",
+						counts.containsKey("PlayPackets.INITIALIZE_BORDER")
+								&& counts.containsKey("PlayPackets.PLAYER_ABILITIES_S2C")
+								&& counts.getOrDefault("PlayPackets.GAME_EVENT", 0) >= 4);
+				int objective = order.indexOf("PlayPackets.SET_OBJECTIVE");
+				int score = order.indexOf("PlayPackets.SET_SCORE");
+				check(name + " adds an objective before any score, or the client drops the scores",
+						score < 0 || (objective >= 0 && objective < score));
+			}
 		}
 
 		// A snapshot must reach at least as far as the server streams, or the outer ring of chunks the
