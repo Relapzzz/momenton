@@ -27,7 +27,12 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
 import java.util.function.DoubleConsumer;
 import java.util.regex.Matcher;
@@ -36,11 +41,14 @@ import java.util.stream.Stream;
 
 public final class FfmpegProcess implements AutoCloseable {
 	private static final int QUEUED_FRAMES = 3;
+	private static final int COPY_THREADS = 4;
+	private static final int DELETE_ATTEMPTS = 100;
+	private static final long DELETE_RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
 	private static final int TAIL_LINES = 50;
 	private static final int SEARCH_DEPTH = 4;
 	private static final Set<String> SKIPPED = Set.of("saves", "momenton", "logs", "assets", "libraries", "versions",
 			"screenshots", "crash-reports", "resourcepacks", "shaderpacks");
-	private static final byte[] END = new byte[0];
+	private static final Frame END = new Frame(new byte[0], CompletableFuture.completedFuture(null));
 	private static final Pattern FRAME = Pattern.compile("frame=\\s*(\\d+)");
 	private static final Pattern TIME = Pattern.compile("time=(\\d+):(\\d+):(\\d+(?:\\.\\d+)?)");
 	private static final long STALL_NANOS = TimeUnit.SECONDS.toNanos(60);
@@ -48,10 +56,12 @@ public final class FfmpegProcess implements AutoCloseable {
 	private final Process process;
 	private final int frameBytes;
 	private final int stride;
+	private final int rows;
 	private final BufferedWriter logFile;
 	private final StringBuilder log = new StringBuilder();
 	private final BlockingQueue<byte[]> free = new ArrayBlockingQueue<>(QUEUED_FRAMES);
-	private final BlockingQueue<byte[]> queued = new ArrayBlockingQueue<>(QUEUED_FRAMES + 1);
+	private final BlockingQueue<Frame> queued = new ArrayBlockingQueue<>(QUEUED_FRAMES + 1);
+	private final ExecutorService copiers = Executors.newFixedThreadPool(COPY_THREADS, Thread.ofPlatform().name("Momenton frame copy ", 0).daemon().factory());
 	private final Thread writer;
 	private final Thread reader;
 	private volatile IOException failure;
@@ -63,6 +73,7 @@ public final class FfmpegProcess implements AutoCloseable {
 		this.process = process;
 		this.frameBytes = width * height * 4;
 		this.stride = width * 4;
+		this.rows = height;
 		this.logFile = logFile;
 		log.append(header);
 		for (int i = 0; i < QUEUED_FRAMES; i++) {
@@ -267,7 +278,7 @@ public final class FfmpegProcess implements AutoCloseable {
 		return FabricLoader.getInstance().getGameDir().resolve("momenton").resolve("export.log");
 	}
 
-	public void writeFrame(ByteBuffer bottomUp) throws IOException {
+	public CompletableFuture<Void> writeFrame(ByteBuffer bottomUp) throws IOException {
 		if (bottomUp.remaining() != frameBytes) {
 			throw new IllegalArgumentException("Expected " + frameBytes + " bytes, got " + bottomUp.remaining());
 		}
@@ -278,14 +289,25 @@ public final class FfmpegProcess implements AutoCloseable {
 			long start = System.nanoTime();
 			byte[] frame = free.take();
 			waited += System.nanoTime() - start;
-			int rows = frameBytes / stride;
-			for (int y = 0; y < rows; y++) {
-				bottomUp.get(bottomUp.position() + (rows - 1 - y) * stride, frame, y * stride, stride);
+			CompletableFuture<?>[] parts = new CompletableFuture<?>[COPY_THREADS];
+			for (int i = 0; i < COPY_THREADS; i++) {
+				int from = rows * i / COPY_THREADS;
+				int to = rows * (i + 1) / COPY_THREADS;
+				parts[i] = CompletableFuture.runAsync(() -> flip(bottomUp, frame, from, to), copiers);
 			}
-			queued.put(frame);
+			CompletableFuture<Void> copied = CompletableFuture.allOf(parts);
+			queued.put(new Frame(frame, copied));
+			return copied;
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			throw new InterruptedIOException();
+		}
+	}
+
+	private void flip(ByteBuffer bottomUp, byte[] frame, int from, int to) {
+		int base = bottomUp.position();
+		for (int y = from; y < to; y++) {
+			bottomUp.get(base + (rows - 1 - y) * stride, frame, y * stride, stride);
 		}
 	}
 
@@ -298,6 +320,7 @@ public final class FfmpegProcess implements AutoCloseable {
 	}
 
 	public void finish() throws IOException {
+		copiers.shutdown();
 		try {
 			progressed = System.nanoTime();
 			queued.put(END);
@@ -322,7 +345,36 @@ public final class FfmpegProcess implements AutoCloseable {
 	@Override
 	public void close() {
 		writer.interrupt();
-		process.destroyForcibly().onExit().join();
+		copiers.shutdown();
+		process.destroyForcibly();
+	}
+
+	public void discard(Path... files) {
+		close();
+		Thread.ofPlatform().name("Momenton export cleanup").daemon().start(() -> {
+			try {
+				process.waitFor();
+			} catch (InterruptedException e) {
+				return;
+			}
+			for (Path file : files) {
+				deleteReleased(file);
+			}
+		});
+	}
+
+	static void deleteReleased(Path path) {
+		IOException error = null;
+		for (int attempt = 0; attempt < DELETE_ATTEMPTS; attempt++) {
+			try {
+				Files.deleteIfExists(path);
+				return;
+			} catch (IOException e) {
+				error = e;
+				LockSupport.parkNanos(DELETE_RETRY_NANOS);
+			}
+		}
+		Momenton.LOGGER.warn("Could not delete {}", path, error);
 	}
 
 	private IOException exited() throws InterruptedException {
@@ -338,9 +390,9 @@ public final class FfmpegProcess implements AutoCloseable {
 	private void writeLoop() {
 		OutputStream out = process.getOutputStream();
 		try {
-			for (byte[] frame = queued.take(); frame != END; frame = queued.take()) {
+			for (Frame frame = queued.take(); frame != END; frame = queued.take()) {
 				write(out, frame);
-				free.add(frame);
+				free.add(frame.bytes());
 			}
 			out.close();
 		} catch (IOException e) {
@@ -349,13 +401,16 @@ public final class FfmpegProcess implements AutoCloseable {
 		}
 	}
 
-	private void write(OutputStream out, byte[] frame) {
-		if (failure == null) {
-			try {
-				out.write(frame);
-			} catch (IOException e) {
-				fail(e);
+	private void write(OutputStream out, Frame frame) throws InterruptedException {
+		try {
+			frame.copied().get();
+			if (failure == null) {
+				out.write(frame.bytes());
 			}
+		} catch (ExecutionException e) {
+			fail(new IOException("Could not copy a frame", e.getCause()));
+		} catch (IOException e) {
+			fail(e);
 		}
 	}
 
@@ -381,6 +436,9 @@ public final class FfmpegProcess implements AutoCloseable {
 		} catch (IOException e) {
 			Momenton.LOGGER.warn("Could not write the ffmpeg log", e);
 		}
+	}
+
+	private record Frame(byte[] bytes, CompletableFuture<?> copied) {
 	}
 
 	public static class FfmpegException extends IOException {

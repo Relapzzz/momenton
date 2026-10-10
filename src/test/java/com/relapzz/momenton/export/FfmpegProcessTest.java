@@ -7,13 +7,17 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -99,6 +103,76 @@ class FfmpegProcessTest {
 	}
 
 	@Test
+	void framesReachFfmpegInOrderWithEveryRowFlipped(@TempDir Path dir) throws IOException {
+		String ffmpeg = ffmpeg();
+		int width = 16;
+		int height = 67;
+		int stride = width * 4;
+		int frames = 7;
+		Path output = dir.resolve("frames.rgba");
+		byte[] expected = new byte[frames * height * stride];
+		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, "-y -f rawvideo -pix_fmt rgba -s %WIDTH%x%HEIGHT% -r %FPS% -i - -f rawvideo -pix_fmt rgba \"%FILENAME%\"",
+				width, height, 30, 0, output, dir.resolve("export.log"))) {
+			for (int f = 0; f < frames; f++) {
+				ByteBuffer frame = ByteBuffer.allocateDirect(height * stride);
+				for (int row = 0; row < height; row++) {
+					for (int x = 0; x < stride; x++) {
+						byte value = (byte) (f * 31 + row * 7 + x);
+						frame.put(row * stride + x, value);
+						expected[f * height * stride + (height - 1 - row) * stride + x] = value;
+					}
+				}
+				process.writeFrame(frame);
+			}
+			process.finish();
+			assertEquals(frames, process.encodedFrames());
+		}
+		assertArrayEquals(expected, Files.readAllBytes(output));
+	}
+
+	@Test
+	void closeReturnsAtOnceWhileTheWriterIsBlockedAndDiscardDeletesTheVideo(@TempDir Path dir) throws Exception {
+		String ffmpeg = ffmpeg();
+		Path video = dir.resolve("clip.mp4");
+		Path pcm = Files.write(dir.resolve("clip.pcm"), new byte[16]);
+		FfmpegProcess process = FfmpegProcess.start(ffmpeg, "-y -readrate_initial_burst 0 -readrate 0.001 -f rawvideo -pix_fmt rgba -s %WIDTH%x%HEIGHT% -r %FPS% -i - -c:v libx264 -preset ultrafast \"%FILENAME%\"",
+				1920, 1080, 60, 0, video, dir.resolve("export.log"));
+		ByteBuffer frame = ByteBuffer.allocateDirect(1920 * 1080 * 4);
+		for (int i = 0; i < 3; i++) {
+			process.writeFrame(frame).join();
+		}
+		long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+		while (!writerBlockedInPipe() && System.nanoTime() < deadline) {
+			Thread.sleep(20);
+		}
+		while (!Files.exists(video) && System.nanoTime() < deadline) {
+			Thread.sleep(20);
+		}
+		assertTrue(writerBlockedInPipe());
+		assertTrue(ffmpegRunning());
+		assertTrue(Files.exists(video));
+
+		assertTimeoutPreemptively(Duration.ofMillis(500), () -> process.discard(video, pcm));
+
+		while ((ffmpegRunning() || Files.exists(video) || Files.exists(pcm)) && System.nanoTime() < deadline) {
+			Thread.sleep(20);
+		}
+		assertFalse(ffmpegRunning());
+		assertFalse(Files.exists(video));
+		assertFalse(Files.exists(pcm));
+	}
+
+	private static boolean writerBlockedInPipe() {
+		return Thread.getAllStackTraces().entrySet().stream()
+				.anyMatch(entry -> entry.getKey().getName().equals("Momenton ffmpeg writer")
+						&& Arrays.stream(entry.getValue()).anyMatch(element -> element.getMethodName().equals("writeBytes")));
+	}
+
+	private static boolean ffmpegRunning() {
+		return ProcessHandle.current().children().anyMatch(child -> child.isAlive() && child.info().command().orElse("").contains("ffmpeg"));
+	}
+
+	@Test
 	void muxReportsProgressAndWritesTheLog(@TempDir Path dir) throws IOException {
 		String ffmpeg = ffmpeg();
 		Path video = dir.resolve("video.mp4");
@@ -174,7 +248,7 @@ class FfmpegProcessTest {
 		Path output = dir.resolve("nested").resolve("my clip.mp4");
 		ByteBuffer frame = ByteBuffer.allocate(16 * 16 * 4);
 		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, EncodingPreset.MP4_DEFAULT.arguments(), 16, 16, 30, 0, output, dir.resolve("export.log"))) {
-			process.writeFrame(frame);
+			process.writeFrame(frame).join();
 			frame.put(0, (byte) 255);
 			process.writeFrame(frame);
 			process.finish();

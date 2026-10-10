@@ -401,13 +401,25 @@ clock and the mic sync all read it the same way.
 6. **GUI scale** = `round(recordedGuiScale * min(width / recordedWidth, height / recordedHeight))`,
    at least 1, injected into `onResolutionChanged`'s `calculateScaleFactor` call. Recordings from
    before Wave 3 have null `framebufferWidth/Height` and `guiScale`, and keep the viewer's scale.
-7. **Readback** (`FrameGrabber`), never blocking the render thread on a fence. Three `GpuBuffer`s
-   with `USAGE_MAP_READ | USAGE_COPY_DST` form a free pool. A grab takes a free buffer and calls
+7. **Readback** (`FrameGrabber`), never blocking the render thread on a fence. Four `GpuBuffer`s
+   (8.3 MB each at 1080p) with `USAGE_MAP_READ | USAGE_HINT_CLIENT_STORAGE | USAGE_COPY_DST` form a
+   free pool. A grab takes a free buffer and calls
    `copyTextureToBuffer` with a callback; vanilla queues that callback behind its own fence
    (`RenderSystem.queueFencedTask`) and `RenderSystem.executePendingTasks`, at the start of every
    `MinecraftClient.render` pass, runs it only once `awaitCompletion(0)` reports the fence done, in
-   order. The callback maps the buffer, hands it to `FfmpegProcess.writeFrame` and returns the buffer
-   to the pool. If the pool is empty the pass is a readback stall and the same frame is rendered again.
+   order. The callback maps the buffer and hands the mapped view to `FfmpegProcess.writeFrame`, which
+   returns a future for the copy out of it; the view stays mapped while the copy runs off the render
+   thread. Each grab and drain check first reclaims, on the render thread, every buffer whose copy is
+   done: it closes the view and returns the buffer to the pool. If the pool is empty the pass is a
+   readback stall and the same frame is rendered again. `close` waits for copies still in flight
+   (bounded by one memory copy, they never block) before closing buffers, so no thread reads a
+   deleted mapping.
+   Why off the render thread: on the Iris Xe ARB/DSA path `createBuffer` maps readable buffers
+   persistently (`GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT`, not coherent), `mapBuffer` is a slice of
+   that mapping and `Mapped.close` only flushes write mappings, but reading the mapping runs at about
+   320 MB/s (25 ms per 1080p frame against 3.3 ms from heap), the profile of uncached memory, and
+   `USAGE_HINT_CLIENT_STORAGE` did not change it. Uncached reads are latency bound per core, so the
+   copy is split across cores and overlapped with rendering instead of serialised on the render thread.
    Why: `GlGpuFence.awaitCompletion` is `glClientWaitSync` with flags 0 (no
    `GL_SYNC_FLUSH_COMMANDS_BIT`), so waiting on a fence whose commands were never flushed can block
    forever; the old `flush()` did exactly that after the last grab, before any buffer swap, and hung
@@ -448,20 +460,33 @@ clock and the mic sync all read it the same way.
    `-Dmomenton.ffmpeg`, then on Windows `<gameDir>/ffmpeg/bin/ffmpeg.exe`, any `ffmpeg.exe` within
    four levels of the game directory (skipping `saves`, `momenton`, `logs`, `assets` and the like) or
    a winget install, on macOS `/usr/local/bin`, `/usr/bin` and the newest Homebrew Cellar build, else
-   plain `ffmpeg` from PATH. `writeFrame` flips the bottom-up readback straight into one of three
-   pooled `byte[]`s (one copy) and a writer thread pipes it to stdin; stdout and stderr are merged and
+   plain `ffmpeg` from PATH. `writeFrame` takes one of three pooled `byte[]`s (blocking while all three
+   are in use: the ffmpeg wait), splits the rows into four bands, flips each band from the bottom-up
+   readback straight into the array on a fixed pool of four "Momenton frame copy" threads (one copy)
+   and queues the frame with its copy future; it returns that future, and the caller keeps the source
+   memory valid until it completes. The writer thread takes frames in queue order, waits for each copy
+   and pipes it to stdin, so frames reach ffmpeg complete, in order and top-down; stdout and stderr are merged and
    teed to `<gameDir>/momenton/export.log` (first line `> ` plus the command) and memory, and the
    reader parses `frame=` for progress. A process that cannot be launched is `NotFoundException`; a
    failure before the log shows an `Output #0` line is `StartupException` (rejected arguments), any
    later failure `FfmpegException`; both carry the log. `finish` closes stdin and waits as long as the
-   reported frame count keeps rising, killing ffmpeg only after 60 s without progress.
+   reported frame count keeps rising, killing ffmpeg only after 60 s without progress. `close` never
+   waits: it interrupts the writer, stops the copy pool and calls `destroyForcibly`. `discard(files)`
+   closes and deletes the temporaries on a "Momenton export cleanup" thread once the process has
+   exited, retrying for up to 5 s because a killed h264_qsv ffmpeg keeps its output locked for about
+   60 ms after its process handle is signalled. Why: cancel used to call `destroyForcibly().onExit().join()`
+   on the render thread; an Esc at frame 1017 of a Quick Sync export logged "Export cancelled" (the
+   last line of `restore`) and then hung the game for a minute until it was killed, with the video and
+   the already-closed PCM still on disk, so the render thread never returned from that join. The
+   render thread must never wait for an external process.
    Session memory only: the screen remembers the last preset, command, arguments and bitrate.
 9. **Finish off the render thread.** At hand-off the render thread restores the window: GUI scale,
    real framebuffer size, vsync, the sound device (`LoopbackRenderer.close`, which keeps the PCM), and
    leaves the replay paused. `ExportFinisher` then runs `ffmpeg.finish()` and the audio mux on its own
    thread while `ui/ExportFinishingScreen` shows "Finishing video" with a progress bar (encoded frames,
-   then the mux's `time=`), the elapsed time and Cancel (Esc too). Cancel kills ffmpeg or the mux and
-   deletes the temporaries and a partial output. When done the screen returns to the screen that was
+   then the mux's `time=`), the elapsed time and Cancel (Esc too). Cancel kills ffmpeg or the mux
+   without waiting; the finishing thread then sees the process end and deletes the temporaries and a
+   partial output (with the same retry as `discard`). A cancelled render calls `discard`. When done the screen returns to the screen that was
    open and toasts the result, or shows `ExportFailedScreen`.
 10. **Progress overlay** (`ui/ExportProgressOverlay`), after ReplayMod's `GuiVideoRenderer`. The
    window never shows the raw replay: after each pass's grab has been recorded, the overlay clears the
@@ -474,7 +499,9 @@ clock and the mic sync all read it the same way.
    the real window shows.
 11. **Instrumentation.** Every 5% the log line carries, per grabbed frame since the last line: fps,
    render passes, wall ms per pass, `GameRenderer.render` ms, settle ms, terrain-wait ms, readback
-   stalls, copy ms (map and flip), ms blocked waiting for a free ffmpeg buffer, audio ms
+   stalls, map ms (`mapBuffer` on the render thread), submit ms (render-thread time in `writeFrame`
+   besides the wait), ms blocked waiting for a free ffmpeg buffer, copy ms per frame (wall time from
+   submit to the last band done, off the render thread) with its throughput in MB/s, audio ms
    (`submitAndJoin` plus `alcRenderSamplesSOFT` plus the PCM write) and overlay ms, plus ffmpeg's
    encoded frame count.
 12. **Around the frame.** Vsync off and the inactivity fps limit lifted; the pause menu never opens on

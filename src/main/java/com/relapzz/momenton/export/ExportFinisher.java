@@ -93,10 +93,10 @@ public final class ExportFinisher {
 				Momenton.LOGGER.error("Export failed while finishing", e);
 			}
 		} finally {
-			ExportSession.delete(video);
-			ExportSession.delete(pcm);
+			FfmpegProcess.deleteReleased(video);
+			FfmpegProcess.deleteReleased(pcm);
 			if (wrote && (cancelled || error != null)) {
-				ExportSession.delete(settings.output());
+				FfmpegProcess.deleteReleased(settings.output());
 			}
 			done = true;
 		}

@@ -30,6 +30,7 @@ import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 
 public final class ExportSession {
@@ -46,7 +47,7 @@ public final class ExportSession {
 	private final FrameGrabber grabber;
 	private final ExportProgressOverlay overlay;
 	private final ExportProgress progress;
-	private final ExportTimings timings = new ExportTimings();
+	private final ExportTimings timings;
 	private final int guiScale;
 	private final int frames;
 
@@ -72,7 +73,8 @@ public final class ExportSession {
 		this.ffmpeg = ffmpeg;
 		this.video = video;
 		this.audio = audio;
-		this.grabber = new FrameGrabber(settings.width(), settings.height());
+		this.timings = new ExportTimings((long) settings.width() * settings.height() * 4);
+		this.grabber = new FrameGrabber(settings.width(), settings.height(), timings);
 		this.overlay = new ExportProgressOverlay(client, settings.width(), settings.height());
 		this.progress = new ExportProgress(frames);
 		this.guiScale = guiScale(metadata, settings);
@@ -127,8 +129,7 @@ public final class ExportSession {
 		try {
 			audio = LoopbackRenderer.start(client, pcm, settings.fps());
 		} catch (IOException e) {
-			ffmpeg.close();
-			delete(video);
+			ffmpeg.discard(video);
 			Momenton.LOGGER.error("Could not create the audio file", e);
 			report(client, false, "Could not create the audio file: " + e.getMessage());
 			return;
@@ -136,10 +137,8 @@ public final class ExportSession {
 
 		ReplaySession.open(client, settings.replay());
 		if (!ReplaySession.isPlaying() || client.player == null) {
-			ffmpeg.close();
 			audio.close();
-			delete(video);
-			delete(pcm);
+			ffmpeg.discard(video, pcm);
 			report(client, false, "Could not open the replay");
 			return;
 		}
@@ -228,7 +227,7 @@ public final class ExportSession {
 				Text.literal(saved ? "Export finished" : "Export stopped"), Text.literal(message));
 	}
 
-	static void delete(Path path) {
+	private static void delete(Path path) {
 		try {
 			Files.deleteIfExists(path);
 		} catch (IOException e) {
@@ -358,19 +357,23 @@ public final class ExportSession {
 				&& !graph.getNeedsUpdate().get();
 	}
 
-	private void write(ByteBuffer rgba) {
+	private CompletableFuture<?> write(ByteBuffer rgba) {
 		if (failure != null) {
-			return;
+			return CompletableFuture.completedFuture(null);
 		}
 		long start = System.nanoTime();
 		long waitedBefore = ffmpeg.waitedNanos();
 		try {
-			ffmpeg.writeFrame(rgba);
+			CompletableFuture<Void> copied = ffmpeg.writeFrame(rgba);
 			delivered++;
+			long waited = ffmpeg.waitedNanos() - waitedBefore;
+			timings.submit(System.nanoTime() - start, waited);
+			long copyStart = start + waited;
+			return copied.whenComplete((ignored, error) -> timings.copied(System.nanoTime() - copyStart));
 		} catch (IOException e) {
 			failure = e;
+			return CompletableFuture.completedFuture(null);
 		}
-		timings.copy(System.nanoTime() - start, ffmpeg.waitedNanos() - waitedBefore);
 	}
 
 	private void handOff() {
@@ -386,9 +389,7 @@ public final class ExportSession {
 
 	private void abort() {
 		restore("cancelled");
-		ffmpeg.close();
-		delete(video);
-		delete(audio.path());
+		ffmpeg.discard(video, audio.path());
 	}
 
 	private void fail(IOException e) {
