@@ -1,5 +1,6 @@
 package com.relapzz.momenton;
 
+import com.relapzz.momenton.audio.MicPlayback;
 import com.relapzz.momenton.config.MomentonKeybinds;
 import com.relapzz.momenton.playback.ReplayScreenInput;
 import com.relapzz.momenton.playback.ReplaySession;
@@ -26,6 +27,7 @@ public class MomentonClient implements ClientModInitializer {
 			ScreenTracker.onClientTick(client);
 			Recorder.onClientTick(client);
 			ReplaySession.onClientTick(client);
+			MicPlayback.onClientTick(client);
 		});
 
 		HudElementRegistry.addLast(Momenton.id("recording_indicator"), new RecordingHud());

@@ -1,6 +1,7 @@
 package com.relapzz.momenton.config;
 
 import com.relapzz.momenton.Momenton;
+import com.relapzz.momenton.audio.MicRecorder;
 import com.relapzz.momenton.playback.ReplaySession;
 import com.relapzz.momenton.record.Recorder;
 import com.relapzz.momenton.ui.ReplayBrowserScreen;
@@ -24,6 +25,7 @@ public final class MomentonKeybinds {
 	private static KeyBinding seekBack;
 	private static KeyBinding seekForward;
 	private static KeyBinding toggleEditor;
+	private static KeyBinding toggleMic;
 
 	private MomentonKeybinds() {
 	}
@@ -35,6 +37,7 @@ public final class MomentonKeybinds {
 		seekBack = register("seek_back", GLFW.GLFW_KEY_LEFT_BRACKET);
 		seekForward = register("seek_forward", GLFW.GLFW_KEY_RIGHT_BRACKET);
 		toggleEditor = register("toggle_editor", GLFW.GLFW_KEY_O);
+		toggleMic = register("toggle_mic", GLFW.GLFW_KEY_UNKNOWN);
 	}
 
 	private static KeyBinding register(String name, int key) {
@@ -66,6 +69,10 @@ public final class MomentonKeybinds {
 
 		while (toggleEditor.wasPressed()) {
 			EditSession.toggle(client);
+		}
+
+		while (toggleMic.wasPressed()) {
+			MicRecorder.toggle(client);
 		}
 	}
 
