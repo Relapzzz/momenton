@@ -1,5 +1,6 @@
 package com.relapzz.momenton.record;
 
+import com.mojang.datafixers.util.Pair;
 import com.relapzz.momenton.mixin.client.PlayerListS2CPacketAccessor;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
@@ -8,11 +9,22 @@ import net.minecraft.client.network.PlayerListEntry;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityPosition;
+import net.minecraft.entity.EquipmentSlot;
+import net.minecraft.entity.Leashable;
+import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.attribute.EntityAttributeInstance;
 import net.minecraft.entity.data.DataTracker;
+import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.item.ItemStack;
 import net.minecraft.network.packet.Packet;
 import net.minecraft.network.packet.s2c.play.ChunkDataS2CPacket;
 import net.minecraft.network.packet.s2c.play.ChunkRenderDistanceCenterS2CPacket;
+import net.minecraft.network.packet.s2c.play.EntityAttachS2CPacket;
+import net.minecraft.network.packet.s2c.play.EntityAttributesS2CPacket;
+import net.minecraft.network.packet.s2c.play.EntityEquipmentUpdateS2CPacket;
+import net.minecraft.network.packet.s2c.play.EntityPassengersSetS2CPacket;
 import net.minecraft.network.packet.s2c.play.EntitySpawnS2CPacket;
+import net.minecraft.network.packet.s2c.play.EntityStatusEffectS2CPacket;
 import net.minecraft.network.packet.s2c.play.EntityTrackerUpdateS2CPacket;
 import net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket;
 import net.minecraft.network.packet.s2c.play.InventoryS2CPacket;
@@ -147,31 +159,65 @@ final class WorldSnapshot {
 	}
 
 	/**
-	 * Spawns every tracked entity and follows each with its tracked data, the way vanilla's own
-	 * pairing bundle does. The local player is skipped - the join packet already created it.
+	 * Spawns every tracked entity and follows each with its tracked data, attributes and equipment, the
+	 * way vanilla's own pairing bundle does, then links passengers and leashes once every entity exists.
+	 * The local player gets no spawn or equipment - the join packet created it and the inventory packet
+	 * dressed it - but does get its tracked data, attributes and status effects.
 	 */
 	private static void addEntities(ClientWorld world, ClientPlayerEntity player, List<Packet<?>> packets) {
 		for (Entity entity : world.getEntities()) {
-			if (entity.getId() == player.getId()) {
-				continue;
+			boolean local = entity.getId() == player.getId();
+			if (!local) {
+				packets.add(new EntitySpawnS2CPacket(
+						entity.getId(),
+						entity.getUuid(),
+						entity.getX(),
+						entity.getY(),
+						entity.getZ(),
+						entity.getPitch(),
+						entity.getYaw(),
+						entity.getType(),
+						0,
+						entity.getVelocity(),
+						entity.getHeadYaw()));
 			}
-
-			packets.add(new EntitySpawnS2CPacket(
-					entity.getId(),
-					entity.getUuid(),
-					entity.getX(),
-					entity.getY(),
-					entity.getZ(),
-					entity.getPitch(),
-					entity.getYaw(),
-					entity.getType(),
-					0,
-					entity.getVelocity(),
-					entity.getHeadYaw()));
 
 			List<DataTracker.SerializedEntry<?>> tracked = entity.getDataTracker().getChangedEntries();
 			if (tracked != null) {
 				packets.add(new EntityTrackerUpdateS2CPacket(entity.getId(), tracked));
+			}
+
+			if (entity instanceof LivingEntity living) {
+				Collection<EntityAttributeInstance> attributes = living.getAttributes().getAttributesToSend();
+				if (!attributes.isEmpty()) {
+					packets.add(new EntityAttributesS2CPacket(entity.getId(), attributes));
+				}
+
+				if (!local) {
+					List<Pair<EquipmentSlot, ItemStack>> equipment = new ArrayList<>();
+					for (EquipmentSlot slot : EquipmentSlot.values()) {
+						ItemStack stack = living.getEquippedStack(slot);
+						if (!stack.isEmpty()) {
+							equipment.add(Pair.of(slot, stack.copy()));
+						}
+					}
+					if (!equipment.isEmpty()) {
+						packets.add(new EntityEquipmentUpdateS2CPacket(entity.getId(), equipment));
+					}
+				}
+			}
+		}
+
+		for (StatusEffectInstance effect : player.getStatusEffects()) {
+			packets.add(new EntityStatusEffectS2CPacket(player.getId(), effect, false));
+		}
+
+		for (Entity entity : world.getEntities()) {
+			if (entity.hasPassengers()) {
+				packets.add(new EntityPassengersSetS2CPacket(entity));
+			}
+			if (entity instanceof Leashable leashable && leashable.getLeashHolder() != null) {
+				packets.add(new EntityAttachS2CPacket(entity, leashable.getLeashHolder()));
 			}
 		}
 	}
