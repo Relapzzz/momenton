@@ -16,6 +16,8 @@
 		"client.PacketApplyBatcherEntryMixin",
 		"client.PlayerAttackCountersMixin",
 		"client.PlayerListS2CPacketAccessor",
+		"client.PredictionClientWorldMixin",
+		"client.PredictionEntityLookupMixin",
 		"client.ServerPackEntryAccessor",
 		"client.ServerPackLoaderAccessor",
 		"client.ServerPackManagerAccessor",
