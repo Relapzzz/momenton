@@ -9,6 +9,8 @@ import com.relapzz.momenton.mixin.client.export.ChunkRenderingDataPreparerAccess
 import com.relapzz.momenton.mixin.client.export.ClientWorldAccessor;
 import com.relapzz.momenton.playback.ReplaySession;
 import com.relapzz.momenton.ui.ExportFailedScreen;
+import com.relapzz.momenton.ui.ExportFinishingScreen;
+import com.relapzz.momenton.ui.ExportProgressOverlay;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.client.gui.DrawContext;
@@ -42,15 +44,20 @@ public final class ExportSession {
 	private final Path video;
 	private final LoopbackRenderer audio;
 	private final FrameGrabber grabber;
+	private final ExportProgressOverlay overlay;
+	private final ExportProgress progress;
+	private final ExportTimings timings = new ExportTimings();
 	private final int guiScale;
 	private final int frames;
 
 	private boolean settling;
+	private boolean draining;
 	private int settleTick;
 	private int settledTicks;
 	private int waited;
 	private boolean cancelled;
 	private int frame;
+	private int delivered;
 	private int clip;
 	private int clipStart;
 	private int target;
@@ -66,6 +73,8 @@ public final class ExportSession {
 		this.video = video;
 		this.audio = audio;
 		this.grabber = new FrameGrabber(settings.width(), settings.height());
+		this.overlay = new ExportProgressOverlay(client, settings.width(), settings.height());
+		this.progress = new ExportProgress(frames);
 		this.guiScale = guiScale(metadata, settings);
 		this.frames = frames;
 		locate();
@@ -102,6 +111,9 @@ public final class ExportSession {
 
 		Path output = settings.output();
 		Path video = output.resolveSibling("momenton-video-" + output.getFileName());
+		Path pcm = output.resolveSibling("momenton-audio-" + output.getFileName() + ".pcm");
+		delete(video);
+		delete(pcm);
 		FfmpegProcess ffmpeg;
 		try {
 			ffmpeg = FfmpegProcess.start(settings.ffmpegCommand(), settings.ffmpegArgs(), settings.width(), settings.height(), settings.fps(), settings.bitrate(), video);
@@ -113,7 +125,7 @@ public final class ExportSession {
 
 		LoopbackRenderer audio;
 		try {
-			audio = LoopbackRenderer.start(client, output.resolveSibling("momenton-audio-" + output.getFileName() + ".pcm"), settings.fps());
+			audio = LoopbackRenderer.start(client, pcm, settings.fps());
 		} catch (IOException e) {
 			ffmpeg.close();
 			delete(video);
@@ -127,6 +139,7 @@ public final class ExportSession {
 			ffmpeg.close();
 			audio.close();
 			delete(video);
+			delete(pcm);
 			report(client, false, "Could not open the replay");
 			return;
 		}
@@ -148,6 +161,12 @@ public final class ExportSession {
 		}
 	}
 
+	public static void togglePreview() {
+		if (active != null) {
+			active.overlay.togglePreview();
+		}
+	}
+
 	public static boolean isSettling() {
 		return active != null && active.settling;
 	}
@@ -158,7 +177,7 @@ public final class ExportSession {
 			return ticks;
 		}
 		if (session.cancelled) {
-			session.end(false, "Export cancelled");
+			session.abort();
 			report(session.client, false, "Export cancelled");
 			return ticks;
 		}
@@ -166,12 +185,19 @@ public final class ExportSession {
 			session.settledTicks += ticks;
 			return ticks;
 		}
-		return Math.max(0, session.target - ReplaySession.currentTick());
+		return session.draining ? 0 : Math.max(0, session.target - ReplaySession.currentTick());
 	}
 
 	public static RenderTickCounter counter(RenderTickCounter counter) {
 		ExportSession session = active;
 		return session == null || session.settling ? counter : session.counter;
+	}
+
+	public static void beforeRender() {
+		ExportSession session = active;
+		if (session != null) {
+			session.timings.renderStarted();
+		}
 	}
 
 	public static void afterRender() {
@@ -195,6 +221,19 @@ public final class ExportSession {
 		context.getMatrices().scale(scale);
 		context.drawTexture(RenderPipelines.GUI_TEXTURED, CURSOR, 0, 0, 0, 0, 16, 16, 16, 16);
 		context.getMatrices().popMatrix();
+	}
+
+	public static void report(MinecraftClient client, boolean saved, String message) {
+		SystemToast.show(client.getToastManager(), SystemToast.Type.PERIODIC_NOTIFICATION,
+				Text.literal(saved ? "Export finished" : "Export stopped"), Text.literal(message));
+	}
+
+	static void delete(Path path) {
+		try {
+			Files.deleteIfExists(path);
+		} catch (IOException e) {
+			Momenton.LOGGER.warn("Could not delete {}", path, e);
+		}
 	}
 
 	private static int guiScale(ReplayMetadata metadata, ExportSettings settings) {
@@ -233,10 +272,15 @@ public final class ExportSession {
 
 	private void rendered() {
 		if (!ReplaySession.isPlaying()) {
-			finish();
+			fail(new IOException("The replay closed before the export finished"));
+			return;
+		}
+		if (failure != null) {
+			fail(failure);
 			return;
 		}
 		if (settling) {
+			timings.pass(ExportTimings.Pass.SETTLE);
 			if (settledTicks >= PositionInterpolator.DEFAULT_INTERPOLATION_DURATION
 					&& !(client.currentScreen instanceof LevelLoadingScreen) && built()) {
 				ReplaySession.seek(settleTick);
@@ -245,31 +289,44 @@ public final class ExportSession {
 				client.particleManager.clearParticles();
 				settling = false;
 			}
-			return;
+		} else if (draining) {
+			timings.pass(ExportTimings.Pass.DRAIN);
+			if (grabber.idle()) {
+				handOff();
+				return;
+			}
+		} else if (ReplaySession.currentTick() != target || !built()) {
+			timings.pass(ExportTimings.Pass.TERRAIN);
+		} else if (!grabber.grab(client.getFramebuffer().getColorAttachment(), this::write)) {
+			timings.pass(ExportTimings.Pass.STALL);
+		} else {
+			timings.pass(ExportTimings.Pass.GRAB);
+			grabbed();
 		}
-		if (ReplaySession.currentTick() != target || !built()) {
-			return;
-		}
+		long start = System.nanoTime();
+		overlay.draw(progress);
+		timings.overlay(System.nanoTime() - start);
+	}
 
-		grabber.grab(client.getFramebuffer().getColorAttachment(), this::write);
+	private void grabbed() {
+		overlay.capture(client.getFramebuffer().getColorAttachment());
+		long start = System.nanoTime();
 		try {
 			audio.render();
 		} catch (IOException e) {
 			failure = e;
 		}
+		timings.audio(System.nanoTime() - start);
 		frame++;
-		if (failure != null) {
-			fail(failure);
-			return;
-		}
+		progress.frameDone();
 
 		int percent = frame * 100 / frames;
 		if (percent >= reported + 5) {
 			reported = percent - percent % 5;
-			Momenton.LOGGER.info("Export {}% ({} of {} frames)", reported, frame, frames);
+			Momenton.LOGGER.info("Export {}% ({} of {} frames): {}", reported, frame, frames, timings.report(ffmpeg.encodedFrames()));
 		}
 		if (frame == frames) {
-			finish();
+			draining = true;
 		} else if (locate()) {
 			settle();
 		}
@@ -305,45 +362,46 @@ public final class ExportSession {
 		if (failure != null) {
 			return;
 		}
+		long start = System.nanoTime();
+		long waitedBefore = ffmpeg.waitedNanos();
 		try {
 			ffmpeg.writeFrame(rgba);
+			delivered++;
 		} catch (IOException e) {
 			failure = e;
 		}
+		timings.copy(System.nanoTime() - start, ffmpeg.waitedNanos() - waitedBefore);
 	}
 
-	private void finish() {
-		try {
-			grabber.flush();
-			if (failure != null) {
-				throw failure;
-			}
-			ffmpeg.finish();
-			FfmpegProcess.mux(settings.ffmpegCommand(), video, audio.path(), settings.output());
-		} catch (IOException e) {
-			fail(e);
+	private void handOff() {
+		Momenton.LOGGER.info("Delivered {} of {} frames to ffmpeg in {} s", delivered, frames, progress.elapsedNanos() / 1_000_000_000.0);
+		if (delivered != frames) {
+			fail(new IOException("Only " + delivered + " of " + frames + " frames reached ffmpeg"));
 			return;
 		}
-		String message = "Saved " + settings.output();
-		end(true, message);
-		report(client, true, message);
+		ExportFinisher finisher = ExportFinisher.start(settings, ffmpeg, video, audio.path(), frames);
+		restore("rendered, finishing in the background");
+		client.setScreen(new ExportFinishingScreen(client.currentScreen, finisher));
+	}
+
+	private void abort() {
+		restore("cancelled");
+		ffmpeg.close();
+		delete(video);
+		delete(audio.path());
 	}
 
 	private void fail(IOException e) {
 		Momenton.LOGGER.error("Export failed", e);
-		String message = "Export failed: " + e.getMessage();
-		end(false, message);
+		abort();
 		ExportFailedScreen.show(client, settings, e);
 	}
 
-	private void end(boolean saved, String message) {
+	private void restore(String outcome) {
 		active = null;
 		grabber.close();
-		if (!saved) {
-			ffmpeg.close();
-		}
+		overlay.close();
 		audio.close();
-		delete(video);
 
 		Window window = client.getWindow();
 		int[] width = new int[1];
@@ -357,20 +415,7 @@ public final class ExportSession {
 		if (ReplaySession.isPlaying() && !ReplaySession.isPaused()) {
 			ReplaySession.togglePause();
 		}
-		Momenton.LOGGER.info("Export ended after {} of {} frames: {}", frame, frames, message);
-	}
-
-	private static void delete(Path path) {
-		try {
-			Files.deleteIfExists(path);
-		} catch (IOException e) {
-			Momenton.LOGGER.warn("Could not delete {}", path, e);
-		}
-	}
-
-	private static void report(MinecraftClient client, boolean saved, String message) {
-		SystemToast.show(client.getToastManager(), SystemToast.Type.PERIODIC_NOTIFICATION,
-				Text.literal(saved ? "Export finished" : "Export stopped"), Text.literal(message));
+		Momenton.LOGGER.info("Export {} after {} of {} frames", outcome, frame, frames);
 	}
 
 	private record FrameCounter(float tickProgress, float deltaTicks) implements RenderTickCounter {

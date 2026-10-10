@@ -1,6 +1,7 @@
 package com.relapzz.momenton.ui;
 
 import com.relapzz.momenton.edit.Clip;
+import com.relapzz.momenton.export.EncoderProbe;
 import com.relapzz.momenton.export.EncodingPreset;
 import com.relapzz.momenton.export.ExportSession;
 import com.relapzz.momenton.export.ExportSettings;
@@ -26,7 +27,7 @@ import java.util.regex.Pattern;
 public class ExportScreen extends Screen {
 	private static final Pattern BITRATE = Pattern.compile("(\\d+)\\s*([km]?)");
 
-	private static EncodingPreset lastPreset = EncodingPreset.MP4_DEFAULT;
+	private static EncodingPreset lastPreset;
 	private static String lastBitrate = "10M";
 	private static String lastCommand;
 	private static String lastArgs;
@@ -38,7 +39,8 @@ public class ExportScreen extends Screen {
 	private final List<Clip> clips;
 	private final String commandDefault;
 	private final List<Text> labels = new ArrayList<>();
-	private EncodingPreset preset = lastPreset;
+	private final List<EncodingPreset> presets = EncodingPreset.available(EncoderProbe.working());
+	private EncodingPreset preset = lastPreset != null && presets.contains(lastPreset) ? lastPreset : presets.getFirst();
 
 	private TextFieldWidget widthField;
 	private TextFieldWidget heightField;
@@ -80,7 +82,7 @@ public class ExportScreen extends Screen {
 			label("screen.momenton.export.range");
 		}
 		addDrawableChild(CyclingButtonWidget.builder(ExportScreen::presetText, preset)
-				.values(EncodingPreset.values())
+				.values(presets)
 				.omitKeyText()
 				.build(left, row(labels.size()), 200, 20, Text.translatable("screen.momenton.export.format"), (button, value) -> changePreset(value)));
 		label("screen.momenton.export.format");

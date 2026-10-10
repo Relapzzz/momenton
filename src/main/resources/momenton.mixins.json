@@ -24,6 +24,7 @@
 		"client.export.ChunkRenderingDataPreparerAccessor",
 		"client.export.ClientWorldAccessor",
 		"client.export.ExportClientMixin",
+		"client.export.ExportGameRendererAccessor",
 		"client.export.ExportGameRendererMixin",
 		"client.export.ExportKeyboardMixin",
 		"client.export.ExportWindowMixin",

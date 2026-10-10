@@ -16,6 +16,8 @@ public class ExportKeyboardMixin {
 		if (ExportSession.isExporting()) {
 			if (action == GLFW.GLFW_PRESS && input.key() == GLFW.GLFW_KEY_ESCAPE) {
 				ExportSession.cancel();
+			} else if (action == GLFW.GLFW_PRESS && input.key() == GLFW.GLFW_KEY_P) {
+				ExportSession.togglePreview();
 			}
 			info.cancel();
 		}

@@ -28,7 +28,10 @@ import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
+import java.util.function.Consumer;
+import java.util.function.DoubleConsumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 public final class FfmpegProcess implements AutoCloseable {
@@ -38,9 +41,13 @@ public final class FfmpegProcess implements AutoCloseable {
 	private static final Set<String> SKIPPED = Set.of("saves", "momenton", "logs", "assets", "libraries", "versions",
 			"screenshots", "crash-reports", "resourcepacks", "shaderpacks");
 	private static final byte[] END = new byte[0];
+	private static final Pattern FRAME = Pattern.compile("frame=\\s*(\\d+)");
+	private static final Pattern TIME = Pattern.compile("time=(\\d+):(\\d+):(\\d+(?:\\.\\d+)?)");
+	private static final long STALL_NANOS = TimeUnit.SECONDS.toNanos(60);
 
 	private final Process process;
 	private final int frameBytes;
+	private final int stride;
 	private final BufferedWriter logFile;
 	private final StringBuilder log = new StringBuilder();
 	private final BlockingQueue<byte[]> free = new ArrayBlockingQueue<>(QUEUED_FRAMES);
@@ -48,10 +55,14 @@ public final class FfmpegProcess implements AutoCloseable {
 	private final Thread writer;
 	private final Thread reader;
 	private volatile IOException failure;
+	private volatile int encoded;
+	private volatile long progressed = System.nanoTime();
+	private long waited;
 
-	private FfmpegProcess(Process process, int frameBytes, BufferedWriter logFile, String header) {
+	private FfmpegProcess(Process process, int width, int height, BufferedWriter logFile, String header) {
 		this.process = process;
-		this.frameBytes = frameBytes;
+		this.frameBytes = width * height * 4;
+		this.stride = width * 4;
 		this.logFile = logFile;
 		log.append(header);
 		for (int i = 0; i < QUEUED_FRAMES; i++) {
@@ -175,7 +186,7 @@ public final class FfmpegProcess implements AutoCloseable {
 			logFile.close();
 			throw new NotFoundException(command, e);
 		}
-		return new FfmpegProcess(process, width * height * 4, logFile, header);
+		return new FfmpegProcess(process, width, height, logFile, header);
 	}
 
 	private static String header(List<String> commandLine) {
@@ -220,17 +231,27 @@ public final class FfmpegProcess implements AutoCloseable {
 		return result;
 	}
 
-	public static void mux(String command, Path video, Path pcm, Path output) throws IOException {
+	public static void mux(String command, Path video, Path pcm, Path output, Path logPath, Consumer<Process> started, DoubleConsumer seconds) throws IOException {
 		List<String> commandLine = List.of(command, "-nostdin", "-y", "-i", video.toString(),
 				"-f", "s16le", "-ar", Integer.toString(LoopbackRenderer.SAMPLE_RATE), "-ac", "2", "-i", pcm.toString(),
 				"-c:v", "copy", "-c:a", audioCodec(output), "-b:a", "192k", "-shortest", output.toString());
 		Process process = new ProcessBuilder(commandLine).redirectErrorStream(true).start();
-		String text = process.inputReader().lines().collect(Collectors.joining("\n", header(commandLine), "\n"));
-		Files.writeString(logPath(), text, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+		started.accept(process);
+		StringBuilder text = new StringBuilder(header(commandLine));
+		try (BufferedReader in = process.inputReader()) {
+			for (String line = in.readLine(); line != null; line = in.readLine()) {
+				text.append(line).append('\n');
+				Matcher time = TIME.matcher(line);
+				if (time.find()) {
+					seconds.accept(Integer.parseInt(time.group(1)) * 3600 + Integer.parseInt(time.group(2)) * 60 + Double.parseDouble(time.group(3)));
+				}
+			}
+		}
+		Files.writeString(logPath, text, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
 		try {
 			int exit = process.waitFor();
 			if (exit != 0) {
-				throw new FfmpegException("ffmpeg could not add the audio, exit code " + exit, text);
+				throw new FfmpegException("ffmpeg could not add the audio, exit code " + exit, text.toString());
 			}
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
@@ -246,16 +267,21 @@ public final class FfmpegProcess implements AutoCloseable {
 		return FabricLoader.getInstance().getGameDir().resolve("momenton").resolve("export.log");
 	}
 
-	public void writeFrame(ByteBuffer rgba) throws IOException {
-		if (rgba.remaining() != frameBytes) {
-			throw new IllegalArgumentException("Expected " + frameBytes + " bytes, got " + rgba.remaining());
+	public void writeFrame(ByteBuffer bottomUp) throws IOException {
+		if (bottomUp.remaining() != frameBytes) {
+			throw new IllegalArgumentException("Expected " + frameBytes + " bytes, got " + bottomUp.remaining());
 		}
 		try {
 			if (failure != null) {
 				throw exited();
 			}
+			long start = System.nanoTime();
 			byte[] frame = free.take();
-			rgba.get(rgba.position(), frame);
+			waited += System.nanoTime() - start;
+			int rows = frameBytes / stride;
+			for (int y = 0; y < rows; y++) {
+				bottomUp.get(bottomUp.position() + (rows - 1 - y) * stride, frame, y * stride, stride);
+			}
 			queued.put(frame);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
@@ -263,14 +289,27 @@ public final class FfmpegProcess implements AutoCloseable {
 		}
 	}
 
+	public long waitedNanos() {
+		return waited;
+	}
+
+	public int encodedFrames() {
+		return encoded;
+	}
+
 	public void finish() throws IOException {
 		try {
+			progressed = System.nanoTime();
 			queued.put(END);
-			writer.join();
-			if (!process.waitFor(30, TimeUnit.SECONDS)) {
-				process.destroy();
+			while (!process.waitFor(1, TimeUnit.SECONDS)) {
+				if (System.nanoTime() - progressed > STALL_NANOS) {
+					process.destroyForcibly().waitFor();
+					reader.join();
+					throw new FfmpegException("ffmpeg made no progress for " + TimeUnit.NANOSECONDS.toSeconds(STALL_NANOS) + " s", log.toString());
+				}
 			}
-			if (failure != null || process.waitFor() != 0) {
+			writer.join();
+			if (failure != null || process.exitValue() != 0) {
 				throw exited();
 			}
 			reader.join();
@@ -329,6 +368,12 @@ public final class FfmpegProcess implements AutoCloseable {
 	private void readLoop() {
 		try (BufferedReader in = process.inputReader(); logFile) {
 			for (String line = in.readLine(); line != null; line = in.readLine()) {
+				Matcher frame = FRAME.matcher(line);
+				int count = frame.find() ? Integer.parseInt(frame.group(1)) : 0;
+				if (count > encoded) {
+					encoded = count;
+					progressed = System.nanoTime();
+				}
 				log.append(line).append('\n');
 				logFile.write(line + "\n");
 				logFile.flush();

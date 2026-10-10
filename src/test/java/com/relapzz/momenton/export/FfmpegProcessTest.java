@@ -7,7 +7,9 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -49,11 +51,77 @@ class FfmpegProcessTest {
 	}
 
 	@Test
-	void defaultPresetIsCrf18() {
-		assertEquals(List.of("-an", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "clip.mp4"),
+	void defaultPresetIsSuperfastCrf18() {
+		assertEquals(List.of("-an", "-c:v", "libx264", "-preset", "superfast", "-crf", "18", "-pix_fmt", "yuv420p", "clip.mp4"),
 				FfmpegProcess.split(FfmpegProcess.substitute(EncodingPreset.MP4_DEFAULT.arguments(), 1920, 1080, 60, 0, "clip.mp4")).subList(INPUT.size(), INPUT.size() + 10));
 		assertFalse(EncodingPreset.MP4_DEFAULT.hasBitrate());
 		assertTrue(EncodingPreset.WEBM_CUSTOM.hasBitrate());
+	}
+
+	@Test
+	void hardwarePresetsAreOfferedOnlyWhenTheyWork() {
+		List<EncodingPreset> software = EncodingPreset.available(Set.of());
+		assertEquals(EncodingPreset.MP4_DEFAULT, software.getFirst());
+		assertTrue(software.stream().noneMatch(EncodingPreset::hardware));
+		List<EncodingPreset> withQsv = EncodingPreset.available(Set.of(EncodingPreset.MP4_QSV));
+		assertEquals(EncodingPreset.MP4_QSV, withQsv.getFirst());
+		assertEquals(software.size() + 1, withQsv.size());
+	}
+
+	@Test
+	void probeAcceptsWorkingEncoderAndRejectsMissingOne() {
+		String ffmpeg = ffmpeg();
+		assertTrue(EncoderProbe.works(ffmpeg, EncodingPreset.MP4_DEFAULT));
+		assertFalse(EncoderProbe.works(ffmpeg + "-missing", EncodingPreset.MP4_QSV));
+	}
+
+	@Test
+	void writeFrameFlipsRowsToTopDown(@TempDir Path dir) throws IOException {
+		String ffmpeg = ffmpeg();
+		Path output = dir.resolve("frame.rgba");
+		ByteBuffer frame = ByteBuffer.allocateDirect(2 * 2 * 4);
+		for (int i = 0; i < 8; i++) {
+			frame.put(i, (byte) (i < 4 ? 1 : 2));
+			frame.put(i + 8, (byte) (i < 4 ? 3 : 4));
+		}
+		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, "-y -f rawvideo -pix_fmt rgba -s %WIDTH%x%HEIGHT% -r %FPS% -i - -f rawvideo -pix_fmt rgba \"%FILENAME%\"",
+				2, 2, 30, 0, output, dir.resolve("export.log"))) {
+			process.writeFrame(frame);
+			process.finish();
+			assertEquals(1, process.encodedFrames());
+		}
+		byte[] written = Files.readAllBytes(output);
+		assertEquals(16, written.length);
+		assertEquals(3, written[0]);
+		assertEquals(4, written[4]);
+		assertEquals(1, written[8]);
+		assertEquals(2, written[12]);
+	}
+
+	@Test
+	void muxReportsProgressAndWritesTheLog(@TempDir Path dir) throws IOException {
+		String ffmpeg = ffmpeg();
+		Path video = dir.resolve("video.mp4");
+		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, EncodingPreset.MP4_DEFAULT.arguments(), 16, 16, 30, 0, video, dir.resolve("export.log"))) {
+			ByteBuffer frame = ByteBuffer.allocate(16 * 16 * 4);
+			for (int i = 0; i < 30; i++) {
+				process.writeFrame(frame);
+			}
+			process.finish();
+			assertEquals(30, process.encodedFrames());
+		}
+		Path pcm = dir.resolve("audio.pcm");
+		Files.write(pcm, new byte[48000 * 4]);
+		Path output = dir.resolve("out.mp4");
+		Path log = dir.resolve("mux.log");
+		List<Process> started = new ArrayList<>();
+		List<Double> seconds = new ArrayList<>();
+		FfmpegProcess.mux(ffmpeg, video, pcm, output, log, started::add, seconds::add);
+		assertEquals(1, started.size());
+		assertFalse(seconds.isEmpty());
+		assertTrue(seconds.getLast() > 0.9, seconds.toString());
+		assertTrue(Files.size(output) > 0);
+		assertTrue(Files.readString(log).startsWith("> " + ffmpeg + " -nostdin"));
 	}
 
 	@Test
