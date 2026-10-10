@@ -13,8 +13,9 @@ import java.io.IOException;
  * attack cooldown are driven by local input. Without it a replay renders the right world under the
  * wrong HUD.
  *
- * <p>Change-gated and reset at every chunk boundary, so the first action of a chunk carries every
- * field and a seek into the middle of a recording still learns the whole state.
+ * <p>Change-gated, except the attack-counter resets, which are events, and reset at every chunk
+ * boundary, so the first action of a chunk carries every field and a seek into the middle of a
+ * recording still learns the whole state.
  */
 public final class UiStateCodec {
 	public static final int FLAG_SELECTED_SLOT = 1;
@@ -23,6 +24,7 @@ public final class UiStateCodec {
 	public static final int FLAG_SWING = 8;
 	public static final int FLAG_COOLDOWN = 16;
 	public static final int FLAG_CHAT_DRAFT = 32;
+	public static final int FLAG_RESETS = 64;
 
 	public static final int SCREEN_NONE = 0;
 	public static final int SCREEN_OWN_INVENTORY = 1;
@@ -34,12 +36,15 @@ public final class UiStateCodec {
 	public static final int SWING_ACTIVE = 1;
 	public static final int SWING_OFF_HAND = 2;
 
+	public static final int RESET_ATTACK = 1;
+	public static final int RESET_ATTACK_AND_EQUIP = 2;
+
 	private UiStateCodec() {
 	}
 
 	/** One decoded action. {@code flags} says which of the rest mean anything. */
 	public record State(int flags, int selectedSlot, int screen, int chatScroll, int swing,
-			int swingTicks, float cooldown, String chatDraft) {
+			int swingTicks, float cooldown, String chatDraft, int resets) {
 
 		public boolean has(int flag) {
 			return (flags & flag) != 0;
@@ -71,6 +76,7 @@ public final class UiStateCodec {
 
 		float cooldown = (flags & FLAG_COOLDOWN) != 0 ? in.readFloat() : 0.0f;
 		String chatDraft = (flags & FLAG_CHAT_DRAFT) != 0 ? in.readUTF() : "";
-		return new State(flags, selectedSlot, screen, chatScroll, swing, swingTicks, cooldown, chatDraft);
+		int resets = (flags & FLAG_RESETS) != 0 ? in.readUnsignedByte() : 0;
+		return new State(flags, selectedSlot, screen, chatScroll, swing, swingTicks, cooldown, chatDraft, resets);
 	}
 }

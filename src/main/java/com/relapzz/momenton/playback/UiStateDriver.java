@@ -19,12 +19,13 @@ import java.io.IOException;
  *
  * <p>Two of these are driven as *events* rather than values, and that is the point rather than a
  * shortcut. Hand swing and attack cooldown are both animations vanilla runs itself, from a start it is
- * told about: {@code tickHandSwing} advances {@code handSwingTicks} every tick and
- * {@code getAttackCooldownProgress} ramps off {@code ticksSinceLastAttack}. Writing the recorded
- * numbers in at the head of the tick would fight both - vanilla would advance them again on the same
- * tick, and the swing would run at double speed. Feeding it the start instead, with
- * {@code swingHand} and {@code resetTicksSinceLastAttack}, makes vanilla produce the same animation it
- * produced live, from the same inputs.
+ * told about: {@code tickHandSwing} advances {@code handSwingTicks} every tick, and
+ * {@code getAttackCooldownProgress} and {@code getHandEquippingProgress} ramp off
+ * {@code ticksSinceLastAttack} and {@code ticksSinceHandEquipping}. Writing the recorded numbers in at
+ * the head of the tick would fight them - vanilla would advance them again on the same tick, and the
+ * swing would run at double speed. Feeding it the start instead, with {@code swingHand},
+ * {@code resetTicksSince} and {@code resetTicksSinceLastAttack}, makes vanilla produce the same
+ * animation it produced live, from the same inputs.
  *
  * <p>So the starts are what matter, and a swing has two kinds. {@code LivingEntity.swingHand} restarts
  * a swing that is already running - {@code handSwingTicks = -1} while {@code handSwinging} stays set -
@@ -33,9 +34,12 @@ import java.io.IOException;
  * starts and both are replayed, and {@code swingHand}'s own half-done guard then accepts or rejects
  * each one exactly as it did live, because the replayed counter is vanilla's own and runs in step.
  *
- * <p>The cooldown resets whenever the recorded progress *drops*, which only happens when the player
- * attacked. All of it survives a seek, because the recorder rewrites the whole state at each chunk
- * boundary.
+ * <p>The counters reset exactly where the recorded reset events say, and with the same method: an
+ * attack, at a mob or at the air, calls {@code resetTicksSince}, which also restarts the held item's
+ * re-equip, the dip {@code HeldItemRenderer.updateHeldItems} draws; a spear jab calls only
+ * {@code resetTicksSinceLastAttack}. A recording made before those events existed resets both
+ * whenever the recorded progress *drops*. All of it survives a seek, because the recorder rewrites the
+ * whole state at each chunk boundary.
  *
  * <p>The open screen and the chat draft are applied when they change, and only over a screen the replay
  * put up: a screen the viewer opened is never closed or replaced, and the change waits until it is gone.
@@ -45,6 +49,7 @@ public final class UiStateDriver {
 	private static boolean swinging;
 	private static int swingTicks;
 	private static float cooldown;
+	private static boolean resetsRecorded;
 	private static int screen;
 	private static String chatDraft = "";
 	private static boolean screenChanged;
@@ -57,6 +62,7 @@ public final class UiStateDriver {
 		swinging = false;
 		swingTicks = 0;
 		cooldown = 0.0f;
+		resetsRecorded = false;
 		screen = UiStateCodec.SCREEN_NONE;
 		chatDraft = "";
 		screenChanged = false;
@@ -82,11 +88,14 @@ public final class UiStateDriver {
 		if (state.has(UiStateCodec.FLAG_COOLDOWN)) {
 			cooldown = state.cooldown();
 		}
+		if (state.has(UiStateCodec.FLAG_RESETS)) {
+			resetsRecorded = true;
+		}
 		takeScreen(state);
 		pending = new UiStateCodec.State(state.flags() & ~(UiStateCodec.FLAG_SWING | UiStateCodec.FLAG_COOLDOWN
-				| UiStateCodec.FLAG_SCREEN | UiStateCodec.FLAG_CHAT_DRAFT),
+				| UiStateCodec.FLAG_SCREEN | UiStateCodec.FLAG_CHAT_DRAFT | UiStateCodec.FLAG_RESETS),
 				state.selectedSlot(), state.screen(), state.chatScroll(), state.swing(), state.swingTicks(), state.cooldown(),
-				state.chatDraft());
+				state.chatDraft(), 0);
 		showScreen(MinecraftClient.getInstance());
 	}
 
@@ -102,7 +111,8 @@ public final class UiStateDriver {
 				swing ? later.swing() : earlier.swing(),
 				swing ? later.swingTicks() : earlier.swingTicks(),
 				later.has(UiStateCodec.FLAG_COOLDOWN) ? later.cooldown() : earlier.cooldown(),
-				later.has(UiStateCodec.FLAG_CHAT_DRAFT) ? later.chatDraft() : earlier.chatDraft());
+				later.has(UiStateCodec.FLAG_CHAT_DRAFT) ? later.chatDraft() : earlier.chatDraft(),
+				earlier.resets() | later.resets());
 	}
 
 	private static void takeScreen(UiStateCodec.State state) {
@@ -184,13 +194,20 @@ public final class UiStateDriver {
 			swingTicks = state.swingTicks();
 		}
 
+		int resets = state.resets();
+		if (state.has(UiStateCodec.FLAG_RESETS)) {
+			resetsRecorded = true;
+		}
 		if (state.has(UiStateCodec.FLAG_COOLDOWN)) {
-			// Progress only ever falls when the player attacked; vanilla ramps it back up itself, at a
-			// rate that depends on the held item - which the LOCAL_PLAYER track has already restored.
-			if (state.cooldown() < cooldown) {
-				player.resetTicksSinceLastAttack();
+			if (!resetsRecorded && state.cooldown() < cooldown) {
+				resets = UiStateCodec.RESET_ATTACK_AND_EQUIP;
 			}
 			cooldown = state.cooldown();
+		}
+		if ((resets & UiStateCodec.RESET_ATTACK_AND_EQUIP) != 0) {
+			player.resetTicksSince();
+		} else if ((resets & UiStateCodec.RESET_ATTACK) != 0) {
+			player.resetTicksSinceLastAttack();
 		}
 	}
 }

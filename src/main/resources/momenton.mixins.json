@@ -14,6 +14,7 @@
 		"client.GameRendererInvoker",
 		"client.GameRendererMixin",
 		"client.PacketApplyBatcherEntryMixin",
+		"client.PlayerAttackCountersMixin",
 		"client.TextFieldWidgetAccessor",
 		"client.audio.SoundEngineMixin",
 		"client.audio.SoundManagerAccessor",

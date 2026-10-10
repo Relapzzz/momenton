@@ -1047,6 +1047,13 @@ Rules discovered while building. Each one cost a failed run or a wrong fix; do n
 - Drive animations by their start, not their frame number; vanilla advances the counters itself.
 - An edge is not a start: `swingHand` restarts a running swing with `handSwinging` still set, so watch
   the counter drop too (9 of 46 starts were lost).
+- Replay the method vanilla called, not one that moves the same number. An attack (mob or air) calls
+  `resetTicksSince`, which restarts `ticksSinceLastAttack` and `ticksSinceHandEquipping`; the second
+  is the held item's dip in `HeldItemRenderer.updateHeldItems`. Driving `resetTicksSinceLastAttack`
+  got the crosshair right and every sword swing looked like a block hit. Which one ran is recorded as
+  an event (`PlayerAttackCountersMixin`, `UI_STATE` `FLAG_RESETS`): a cooldown drop cannot tell, since
+  a spear jab resets only the cooldown and an attack-speed change at an item switch drops it with no
+  reset at all.
 - `isSneaking()` on the client player reads `player.input`; feed a real `Input` with movement false.
 - `noClip` is overwritten first thing in `PlayerEntity.tick`; use `setNoGravity(true)` and zero
   velocity.
