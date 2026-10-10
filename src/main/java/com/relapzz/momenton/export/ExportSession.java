@@ -66,15 +66,15 @@ public final class ExportSession {
 	private RenderTickCounter counter;
 	private IOException failure;
 
-	private ExportSession(MinecraftClient client, ExportSettings settings, ReplayMetadata metadata, int frames, FfmpegProcess ffmpeg,
-			Path video, LoopbackRenderer audio) {
+	private ExportSession(MinecraftClient client, ExportSettings settings, ReplayMetadata metadata, int frames, FrameFormat format,
+			FfmpegProcess ffmpeg, Path video, LoopbackRenderer audio) {
 		this.client = client;
 		this.settings = settings;
 		this.ffmpeg = ffmpeg;
 		this.video = video;
 		this.audio = audio;
-		this.timings = new ExportTimings((long) settings.width() * settings.height() * 4);
-		this.grabber = new FrameGrabber(settings.width(), settings.height(), timings);
+		this.timings = new ExportTimings(format.bytes(settings.width(), settings.height()));
+		this.grabber = new FrameGrabber(settings.width(), settings.height(), format, timings);
 		this.overlay = new ExportProgressOverlay(client, settings.width(), settings.height());
 		this.progress = new ExportProgress(frames);
 		this.guiScale = guiScale(metadata, settings);
@@ -116,9 +116,10 @@ public final class ExportSession {
 		Path pcm = output.resolveSibling("momenton-audio-" + output.getFileName() + ".pcm");
 		delete(video);
 		delete(pcm);
+		FrameFormat format = FrameGrabber.format(settings.ffmpegArgs(), settings.width(), settings.height());
 		FfmpegProcess ffmpeg;
 		try {
-			ffmpeg = FfmpegProcess.start(settings.ffmpegCommand(), settings.ffmpegArgs(), settings.width(), settings.height(), settings.fps(), settings.bitrate(), video);
+			ffmpeg = FfmpegProcess.start(settings.ffmpegCommand(), settings.ffmpegArgs(), format, settings.width(), settings.height(), settings.fps(), settings.bitrate(), video);
 		} catch (IOException e) {
 			Momenton.LOGGER.error("Could not start FFmpeg", e);
 			ExportFailedScreen.show(client, settings, e);
@@ -143,15 +144,15 @@ public final class ExportSession {
 			return;
 		}
 
-		active = new ExportSession(client, settings, metadata, frames, ffmpeg, video, audio);
+		active = new ExportSession(client, settings, metadata, frames, format, ffmpeg, video, audio);
 		active.settle();
 		Window window = client.getWindow();
 		window.setVsync(false);
 		window.setFramebufferWidth(settings.width());
 		window.setFramebufferHeight(settings.height());
 		client.onResolutionChanged();
-		Momenton.LOGGER.info("Exporting {} frames of {} in {} clips at {}x{} {} fps to {}", frames, settings.replay().getFileName(),
-				settings.clips().size(), settings.width(), settings.height(), settings.fps(), settings.output());
+		Momenton.LOGGER.info("Exporting {} frames of {} in {} clips at {}x{} {} fps as {} to {}", frames, settings.replay().getFileName(),
+				settings.clips().size(), settings.width(), settings.height(), settings.fps(), format, settings.output());
 	}
 
 	public static void cancel() {
@@ -296,7 +297,7 @@ public final class ExportSession {
 			}
 		} else if (ReplaySession.currentTick() != target || !built()) {
 			timings.pass(ExportTimings.Pass.TERRAIN);
-		} else if (!grabber.grab(client.getFramebuffer().getColorAttachment(), this::write)) {
+		} else if (!grabber.grab(client.getFramebuffer(), this::write)) {
 			timings.pass(ExportTimings.Pass.STALL);
 		} else {
 			timings.pass(ExportTimings.Pass.GRAB);
@@ -357,14 +358,14 @@ public final class ExportSession {
 				&& !graph.getNeedsUpdate().get();
 	}
 
-	private CompletableFuture<?> write(ByteBuffer rgba) {
+	private CompletableFuture<?> write(ByteBuffer frame) {
 		if (failure != null) {
 			return CompletableFuture.completedFuture(null);
 		}
 		long start = System.nanoTime();
 		long waitedBefore = ffmpeg.waitedNanos();
 		try {
-			CompletableFuture<Void> copied = ffmpeg.writeFrame(rgba);
+			CompletableFuture<Void> copied = ffmpeg.writeFrame(frame);
 			delivered++;
 			long waited = ffmpeg.waitedNanos() - waitedBefore;
 			timings.submit(System.nanoTime() - start, waited);

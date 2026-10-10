@@ -401,8 +401,34 @@ clock and the mic sync all read it the same way.
 6. **GUI scale** = `round(recordedGuiScale * min(width / recordedWidth, height / recordedHeight))`,
    at least 1, injected into `onResolutionChanged`'s `calculateScaleFactor` call. Recordings from
    before Wave 3 have null `framebufferWidth/Height` and `guiScale`, and keep the viewer's scale.
-7. **Readback** (`FrameGrabber`), never blocking the render thread on a fence. Four `GpuBuffer`s
-   (8.3 MB each at 1080p) with `USAGE_MAP_READ | USAGE_HINT_CLIENT_STORAGE | USAGE_COPY_DST` form a
+7. **Readback** (`FrameGrabber`), never blocking the render thread on a fence.
+   **NV12 on the GPU.** Before the copy, a Blaze3D pass converts the colour attachment to NV12, so
+   the readback is 1.5 bytes per pixel (3.1 MB at 1080p) instead of 8.3 MB; the copy out of uncached
+   readback memory was the bottleneck (42 ms per frame at about 470 MB/s on the Iris Xe). The pipeline
+   `momenton:pipeline/nv12` follows vanilla `RenderPipelines.TRACY_BLIT` and
+   `TracyFrameCapturer.capture`: vertex shader `minecraft:core/screenquad` (fullscreen triangle from
+   `gl_VertexID`, `VertexFormats.EMPTY`, `TRIANGLES`, `draw(0, 3)`), fragment shader
+   `assets/momenton/shaders/core/nv12.fsh` (found by `ShaderLoader`, which loads `shaders/` from every
+   namespace), sampler `InSampler` bound to the colour attachment view with the cached NEAREST sampler,
+   no depth, drawn with `createRenderPass` into an RGBA8 target of `width / 4` by `height * 3 / 2`
+   (`USAGE_RENDER_ATTACHMENT | USAGE_COPY_SRC`), then `copyTextureToBuffer` from that target. Each
+   fragment writes four bytes: four Y samples in the first `height` rows, two interleaved UV pairs
+   below, which is the NV12 byte layout; RGBA8 rather than RED8 because GL never sets
+   `GL_PACK_ALIGNMENT` for readback and RGBA8 is the target format every backend already copies.
+   Rows are fetched with `texelFetch` at `height - 1 - row`, the same memory-row flip the CPU did,
+   so the result is top-down whatever the backend's origin. Colour is BT.709 limited range:
+   `Y = 16 + 219 (0.2126 R + 0.7152 G + 0.0722 B)`, `U = 128 + 224 (B - Y') / 1.8556`,
+   `V = 128 + 224 (R - Y') / 1.5748`, rounded by the unorm store. Chroma copies what ffmpeg's
+   swscale does for rgba to nv12 (measured with single-pixel impulses): a plain average of the two
+   pixels horizontally and a vertical 2:1 bicubic (B 0, C 0.6, eight taps
+   `-0.0140625 -0.0421875 0.1203125 0.4359375` mirrored, edge rows clamped). `Nv12ShaderTest` runs a
+   Java transliteration of the shader against ffmpeg's own conversion of the same RGBA frame (the RGBA
+   fallback path): every sample within 1, Y about 69 dB, U and V 67 to 75 dB, 98.8 to 100% exact, and
+   the same on real 1080p screenshots. NV12 is used when the arguments contain `%INPUT%`, width is a
+   multiple of 4, height is even, and `GpuDevice.precompilePipeline` reports the pipeline valid;
+   otherwise (or if building it throws) the export logs once and reads back RGBA as before, flipped on
+   the CPU. The chosen format is in the "Exporting" log line.
+   Four `GpuBuffer`s of one frame each with `USAGE_MAP_READ | USAGE_HINT_CLIENT_STORAGE | USAGE_COPY_DST` form a
    free pool. A grab takes a free buffer and calls
    `copyTextureToBuffer` with a callback; vanilla queues that callback behind its own fence
    (`RenderSystem.queueFencedTask`) and `RenderSystem.executePendingTasks`, at the start of every
@@ -454,15 +480,16 @@ clock and the mic sync all read it the same way.
    The game and the encoder share the CPU, so CPU time per frame is what limits an export; both
    defaults match or beat the old default's SSIM for a quarter (software) or a sixteenth
    (hardware) of its CPU. NVENC (`p5 hq vbr cq 19`) and AMF (`cqp 18/20`) are unmeasured here.
-   `%WIDTH% %HEIGHT% %FPS% %FILENAME% %BITRATE% %FILTERS%` are substituted (FILENAME is the bare
-   name, ffmpeg runs in the output folder, BITRATE is bits per second, FILTERS is empty), and the
+   `%INPUT%` becomes the input description for the frame format, then `%WIDTH% %HEIGHT% %FPS%
+   %FILENAME% %BITRATE%` are substituted (FILENAME is the bare name, ffmpeg runs in the output folder,
+   BITRATE is bits per second), and the
    string is split on whitespace with double quotes grouping. The command defaults to
    `-Dmomenton.ffmpeg`, then on Windows `<gameDir>/ffmpeg/bin/ffmpeg.exe`, any `ffmpeg.exe` within
    four levels of the game directory (skipping `saves`, `momenton`, `logs`, `assets` and the like) or
    a winget install, on macOS `/usr/local/bin`, `/usr/bin` and the newest Homebrew Cellar build, else
    plain `ffmpeg` from PATH. `writeFrame` takes one of three pooled `byte[]`s (blocking while all three
-   are in use: the ffmpeg wait), splits the rows into four bands, flips each band from the bottom-up
-   readback straight into the array on a fixed pool of four "Momenton frame copy" threads (one copy)
+   are in use: the ffmpeg wait), splits the rows into four bands, copies each band (NV12, already
+   top-down) or flips it (RGBA, bottom-up) from the readback straight into the array on a fixed pool of four "Momenton frame copy" threads (one copy)
    and queues the frame with its copy future; it returns that future, and the caller keeps the source
    memory valid until it completes. The writer thread takes frames in queue order, waits for each copy
    and pipes it to stdin, so frames reach ffmpeg complete, in order and top-down; stdout and stderr are merged and
@@ -479,6 +506,19 @@ clock and the mic sync all read it the same way.
    last line of `restore`) and then hung the game for a minute until it was killed, with the video and
    the already-closed PCM still on disk, so the render thread never returned from that join. The
    render thread must never wait for an external process.
+   **Input and colour tags.** NV12 input is
+   `-f rawvideo -pix_fmt nv12 -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv`;
+   RGBA input is `-f rawvideo -pix_fmt rgba -color_primaries bt709 -color_trc bt709 ... -i -
+   -vf scale=out_color_matrix=bt709:out_range=tv`. The tags go on the input because ffmpeg 9 takes
+   the stream's colour properties from the frames: output-only tags were ignored for trc and
+   primaries, and on untagged NV12 they made the auto-inserted scaler convert the planes (max error 77).
+   With input tags every preset's output is tagged `tv, bt709` and NV12 reaches libx264 bit-exact
+   (`-qp 0` round trip). Before this, RGBA was converted with swscale's default BT.601 matrix and left
+   untagged, which players show with BT.709, so reds were slightly off. Hardware encoders and x264/vpx
+   take NV12 directly or repack it to yuv420p with no colour math. **MKV lossless stays RGBA** (its
+   arguments spell out the RGBA input instead of `%INPUT%`), encoded as yuv444p: 4:2:0 halves chroma
+   resolution, which smears coloured HUD text and item edges, and a lossless preset should lose only
+   8-bit rounding.
    Session memory only: the screen remembers the last preset, command, arguments and bitrate.
 9. **Finish off the render thread.** At hand-off the render thread restores the window: GUI scale,
    real framebuffer size, vsync, the sound device (`LoopbackRenderer.close`, which keeps the PCM), and
@@ -499,9 +539,11 @@ clock and the mic sync all read it the same way.
    the real window shows.
 11. **Instrumentation.** Every 5% the log line carries, per grabbed frame since the last line: fps,
    render passes, wall ms per pass, `GameRenderer.render` ms, settle ms, terrain-wait ms, readback
-   stalls, map ms (`mapBuffer` on the render thread), submit ms (render-thread time in `writeFrame`
+   stalls, convert ms (render-thread time to record the NV12 pass; the GPU time is not measured,
+   because a timer query throws while vanilla's `GlTimer` profiles the frame), map ms (`mapBuffer` on
+   the render thread), submit ms (render-thread time in `writeFrame`
    besides the wait), ms blocked waiting for a free ffmpeg buffer, copy ms per frame (wall time from
-   submit to the last band done, off the render thread) with its throughput in MB/s, audio ms
+   submit to the last band done, off the render thread) with its throughput in MB/s of frame bytes (NV12 or RGBA), audio ms
    (`submitAndJoin` plus `alcRenderSamplesSOFT` plus the PCM write) and overlay ms, plus ffmpeg's
    encoded frame count.
 12. **Around the frame.** Vsync off and the inactivity fps limit lifted; the pause menu never opens on
@@ -511,7 +553,7 @@ clock and the mic sync all read it the same way.
    name are deleted at start.
 
 ```
-ffmpeg -y -f rawvideo -pix_fmt rgba -s %WIDTH%x%HEIGHT% -r %FPS% -i - %FILTERS%-an \
+ffmpeg -y %INPUT% -an \
        -c:v h264_qsv -preset medium -global_quality 17 -look_ahead 0 -pix_fmt nv12 "%FILENAME%"
 ```
 
@@ -1018,6 +1060,7 @@ recording overhead, VulkanMod run, ffmpeg auto-download and hardware encoders, 4
 | Risk | Mitigation |
 |---|---|
 | VulkanMod's `GpuDevice` misses a readback path | Readback uses only the path vanilla screenshots use (`copyTextureToBuffer` + `mapBuffer`); the Export gate runs once under VulkanMod 0.6.3 |
+| VulkanMod cannot translate or run the NV12 shader | It is plain GLSL 330 in vanilla style (one `sampler2D`, no uniform blocks, vanilla `core/screenquad` vertex shader, RGBA8 target); a pipeline that does not compile falls back to RGBA readback, but a failure only at draw time is not caught; check once under VulkanMod |
 | Exported frames have holes from async chunk builds | Export re-renders until `chunkUpdaters`, terrain, block buffer pool and occlusion graph are all settled before grabbing, capped at 600 passes |
 | HUD is the wrong size at a different export resolution | GUI-scale rule: metadata stores the recording's window size and GUI scale, export picks the scale that keeps the HUD's relative size |
 | Exported motion feels subtly wrong | `frames.bin` at render-frame rate plus a fixed per-frame `RenderTickCounter`; validated against a side-by-side OBS capture at the Export gate |

@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -11,6 +12,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -22,7 +24,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class FfmpegProcessTest {
-	private static final List<String> INPUT = List.of("-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", "1920x1080", "-r", "60", "-i", "-");
+	private static final List<String> RGBA_INPUT = List.of("-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-color_primaries", "bt709", "-color_trc", "bt709",
+			"-s", "1920x1080", "-r", "60", "-i", "-", "-vf", "scale=out_color_matrix=bt709:out_range=tv");
+	private static final List<String> NV12_INPUT = List.of("-y", "-f", "rawvideo", "-pix_fmt", "nv12", "-colorspace", "bt709", "-color_primaries", "bt709",
+			"-color_trc", "bt709", "-color_range", "tv", "-s", "1920x1080", "-r", "60", "-i", "-");
 
 	@Test
 	void splitsOnWhitespace() {
@@ -43,21 +48,31 @@ class FfmpegProcessTest {
 	}
 
 	@Test
-	void substitutesEveryPreset() {
-		for (EncodingPreset preset : EncodingPreset.values()) {
-			List<String> args = FfmpegProcess.split(FfmpegProcess.substitute(preset.arguments(), 1920, 1080, 60, 8_000_000, "my clip." + preset.extension()));
-			assertEquals(INPUT, args.subList(0, INPUT.size()), preset.name());
-			assertEquals("-an", args.get(INPUT.size()), preset.name());
-			assertEquals("my clip." + preset.extension(), args.getLast(), preset.name());
-			assertEquals(preset.hasBitrate(), args.contains("8000000"), preset.name());
-			assertTrue(args.stream().noneMatch(arg -> arg.contains("%")), preset.name());
+	void substitutesEveryPresetForEitherFrameFormat() {
+		for (FrameFormat format : FrameFormat.values()) {
+			for (EncodingPreset preset : EncodingPreset.values()) {
+				List<String> args = FfmpegProcess.split(FfmpegProcess.substitute(format.expand(preset.arguments()), 1920, 1080, 60, 8_000_000, "my clip." + preset.extension()));
+				List<String> input = format == FrameFormat.NV12 && preset != EncodingPreset.MKV_LOSSLESS ? NV12_INPUT : RGBA_INPUT;
+				assertEquals(input, args.subList(0, input.size()), format + " " + preset);
+				assertEquals("-an", args.get(input.size()), format + " " + preset);
+				assertEquals("my clip." + preset.extension(), args.getLast(), format + " " + preset);
+				assertEquals(preset.hasBitrate(), args.contains("8000000"), format + " " + preset);
+				assertTrue(args.stream().noneMatch(arg -> arg.contains("%")), format + " " + preset);
+			}
 		}
+	}
+
+	@Test
+	void frameSizes() {
+		assertEquals(1920 * 1080 * 4, FrameFormat.RGBA.bytes(1920, 1080));
+		assertEquals(1920 * 1080 * 3 / 2, FrameFormat.NV12.bytes(1920, 1080));
 	}
 
 	@Test
 	void defaultPresetIsSuperfastCrf18() {
 		assertEquals(List.of("-an", "-c:v", "libx264", "-preset", "superfast", "-crf", "18", "-pix_fmt", "yuv420p", "clip.mp4"),
-				FfmpegProcess.split(FfmpegProcess.substitute(EncodingPreset.MP4_DEFAULT.arguments(), 1920, 1080, 60, 0, "clip.mp4")).subList(INPUT.size(), INPUT.size() + 10));
+				FfmpegProcess.split(FfmpegProcess.substitute(FrameFormat.NV12.expand(EncodingPreset.MP4_DEFAULT.arguments()), 1920, 1080, 60, 0, "clip.mp4"))
+						.subList(NV12_INPUT.size(), NV12_INPUT.size() + 10));
 		assertFalse(EncodingPreset.MP4_DEFAULT.hasBitrate());
 		assertTrue(EncodingPreset.WEBM_CUSTOM.hasBitrate());
 	}
@@ -89,7 +104,7 @@ class FfmpegProcessTest {
 			frame.put(i + 8, (byte) (i < 4 ? 3 : 4));
 		}
 		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, "-y -f rawvideo -pix_fmt rgba -s %WIDTH%x%HEIGHT% -r %FPS% -i - -f rawvideo -pix_fmt rgba \"%FILENAME%\"",
-				2, 2, 30, 0, output, dir.resolve("export.log"))) {
+				FrameFormat.RGBA, 2, 2, 30, 0, output, dir.resolve("export.log"))) {
 			process.writeFrame(frame);
 			process.finish();
 			assertEquals(1, process.encodedFrames());
@@ -112,7 +127,7 @@ class FfmpegProcessTest {
 		Path output = dir.resolve("frames.rgba");
 		byte[] expected = new byte[frames * height * stride];
 		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, "-y -f rawvideo -pix_fmt rgba -s %WIDTH%x%HEIGHT% -r %FPS% -i - -f rawvideo -pix_fmt rgba \"%FILENAME%\"",
-				width, height, 30, 0, output, dir.resolve("export.log"))) {
+				FrameFormat.RGBA, width, height, 30, 0, output, dir.resolve("export.log"))) {
 			for (int f = 0; f < frames; f++) {
 				ByteBuffer frame = ByteBuffer.allocateDirect(height * stride);
 				for (int row = 0; row < height; row++) {
@@ -131,21 +146,60 @@ class FfmpegProcessTest {
 	}
 
 	@Test
+	void nv12FramesReachFfmpegUnchangedAndInOrder(@TempDir Path dir) throws IOException {
+		String ffmpeg = ffmpeg();
+		int width = 16;
+		int height = 10;
+		int frames = 5;
+		int size = FrameFormat.NV12.bytes(width, height);
+		Path output = dir.resolve("frames.nv12");
+		byte[] expected = new byte[frames * size];
+		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, "-y %INPUT% -f rawvideo -pix_fmt nv12 \"%FILENAME%\"",
+				FrameFormat.NV12, width, height, 30, 0, output, dir.resolve("export.log"))) {
+			for (int f = 0; f < frames; f++) {
+				ByteBuffer frame = ByteBuffer.allocateDirect(size);
+				for (int i = 0; i < size; i++) {
+					byte value = (byte) (16 + (f * 37 + i * 11) % 220);
+					frame.put(i, value);
+					expected[f * size + i] = value;
+				}
+				process.writeFrame(frame);
+			}
+			process.finish();
+			assertEquals(frames, process.encodedFrames());
+		}
+		assertArrayEquals(expected, Files.readAllBytes(output));
+	}
+
+	@Test
+	void everyFrameFormatIsTaggedBt709LimitedRange(@TempDir Path dir) throws IOException {
+		String ffmpeg = ffmpeg();
+		Map<EncodingPreset, FrameFormat> runs = Map.of(EncodingPreset.MP4_DEFAULT, FrameFormat.NV12, EncodingPreset.MP4_CUSTOM, FrameFormat.RGBA,
+				EncodingPreset.WEBM_CUSTOM, FrameFormat.NV12, EncodingPreset.MKV_LOSSLESS, FrameFormat.RGBA);
+		runs.forEach((preset, format) -> {
+			Path log = dir.resolve(preset + ".log");
+			try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, preset.arguments(), format, 16, 16, 30, 1_000_000,
+					dir.resolve("clip." + preset.extension()), log)) {
+				process.writeFrame(ByteBuffer.allocate(format.bytes(16, 16)));
+				process.finish();
+				String chroma = preset == EncodingPreset.MKV_LOSSLESS ? "yuv444p" : "yuv420p";
+				assertTrue(Files.readString(log).contains(chroma + "(tv, bt709, progressive)"), preset.name());
+			} catch (IOException e) {
+				throw new UncheckedIOException(e);
+			}
+		});
+	}
+
+	@Test
 	void closeReturnsAtOnceWhileTheWriterIsBlockedAndDiscardDeletesTheVideo(@TempDir Path dir) throws Exception {
 		String ffmpeg = ffmpeg();
 		Path video = dir.resolve("clip.mp4");
 		Path pcm = Files.write(dir.resolve("clip.pcm"), new byte[16]);
-		FfmpegProcess process = FfmpegProcess.start(ffmpeg, "-y -readrate_initial_burst 0 -readrate 0.001 -f rawvideo -pix_fmt rgba -s %WIDTH%x%HEIGHT% -r %FPS% -i - -c:v libx264 -preset ultrafast \"%FILENAME%\"",
-				1920, 1080, 60, 0, video, dir.resolve("export.log"));
-		ByteBuffer frame = ByteBuffer.allocateDirect(1920 * 1080 * 4);
-		for (int i = 0; i < 3; i++) {
-			process.writeFrame(frame).join();
-		}
+		FfmpegProcess process = FfmpegProcess.start(ffmpeg, "-nostdin -y -re -f lavfi -i color=s=16x16:r=10 -t 60 -c:v libx264 -preset ultrafast \"%FILENAME%\"",
+				FrameFormat.RGBA, 1920, 1080, 60, 0, video, dir.resolve("export.log"));
+		process.writeFrame(ByteBuffer.allocateDirect(1920 * 1080 * 4)).join();
 		long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
-		while (!writerBlockedInPipe() && System.nanoTime() < deadline) {
-			Thread.sleep(20);
-		}
-		while (!Files.exists(video) && System.nanoTime() < deadline) {
+		while (!(writerBlockedInPipe() && Files.exists(video)) && System.nanoTime() < deadline) {
 			Thread.sleep(20);
 		}
 		assertTrue(writerBlockedInPipe());
@@ -176,7 +230,7 @@ class FfmpegProcessTest {
 	void muxReportsProgressAndWritesTheLog(@TempDir Path dir) throws IOException {
 		String ffmpeg = ffmpeg();
 		Path video = dir.resolve("video.mp4");
-		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, EncodingPreset.MP4_DEFAULT.arguments(), 16, 16, 30, 0, video, dir.resolve("export.log"))) {
+		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, EncodingPreset.MP4_DEFAULT.arguments(), FrameFormat.RGBA, 16, 16, 30, 0, video, dir.resolve("export.log"))) {
 			ByteBuffer frame = ByteBuffer.allocate(16 * 16 * 4);
 			for (int i = 0; i < 30; i++) {
 				process.writeFrame(frame);
@@ -218,12 +272,12 @@ class FfmpegProcessTest {
 	@Test
 	void missingBinaryIsNotFound(@TempDir Path dir) {
 		assertThrows(FfmpegProcess.NotFoundException.class, () -> FfmpegProcess.start(dir.resolve("missing-ffmpeg").toString(),
-				EncodingPreset.MP4_DEFAULT.arguments(), 16, 16, 30, 0, dir.resolve("clip.mp4"), dir.resolve("export.log")));
+				EncodingPreset.MP4_DEFAULT.arguments(), FrameFormat.RGBA, 16, 16, 30, 0, dir.resolve("clip.mp4"), dir.resolve("export.log")));
 	}
 
 	@Test
 	void unbalancedQuotesAreAStartupFailure(@TempDir Path dir) {
-		assertThrows(FfmpegProcess.StartupException.class, () -> FfmpegProcess.start("ffmpeg", "-i - \"%FILENAME%", 16, 16, 30, 0,
+		assertThrows(FfmpegProcess.StartupException.class, () -> FfmpegProcess.start("ffmpeg", "-i - \"%FILENAME%", FrameFormat.RGBA, 16, 16, 30, 0,
 				dir.resolve("clip.mp4"), dir.resolve("export.log")));
 	}
 
@@ -232,7 +286,7 @@ class FfmpegProcessTest {
 		String java = ProcessHandle.current().info().command().orElseThrow();
 		Path log = dir.resolve("logs").resolve("export.log");
 		FfmpegProcess.StartupException error = assertThrows(FfmpegProcess.StartupException.class, () -> {
-			try (FfmpegProcess process = FfmpegProcess.start(java, "-XX:+MomentonNoSuchOption", 16, 16, 30, 0, dir.resolve("clip.mp4"), log)) {
+			try (FfmpegProcess process = FfmpegProcess.start(java, "-XX:+MomentonNoSuchOption", FrameFormat.RGBA, 16, 16, 30, 0, dir.resolve("clip.mp4"), log)) {
 				process.writeFrame(ByteBuffer.allocate(16 * 16 * 4));
 				process.finish();
 			}
@@ -247,7 +301,7 @@ class FfmpegProcessTest {
 		String ffmpeg = ffmpeg();
 		Path output = dir.resolve("nested").resolve("my clip.mp4");
 		ByteBuffer frame = ByteBuffer.allocate(16 * 16 * 4);
-		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, EncodingPreset.MP4_DEFAULT.arguments(), 16, 16, 30, 0, output, dir.resolve("export.log"))) {
+		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, EncodingPreset.MP4_DEFAULT.arguments(), FrameFormat.RGBA, 16, 16, 30, 0, output, dir.resolve("export.log"))) {
 			process.writeFrame(frame).join();
 			frame.put(0, (byte) 255);
 			process.writeFrame(frame);
@@ -261,7 +315,7 @@ class FfmpegProcessTest {
 	void unknownFormatIsAStartupFailure(@TempDir Path dir) {
 		String ffmpeg = ffmpeg();
 		FfmpegProcess.StartupException error = assertThrows(FfmpegProcess.StartupException.class, () -> {
-			try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, EncodingPreset.MP4_DEFAULT.arguments(), 16, 16, 30, 0, dir.resolve("clip.unknownformat"), dir.resolve("export.log"))) {
+			try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, EncodingPreset.MP4_DEFAULT.arguments(), FrameFormat.RGBA, 16, 16, 30, 0, dir.resolve("clip.unknownformat"), dir.resolve("export.log"))) {
 				process.writeFrame(ByteBuffer.allocate(16 * 16 * 4));
 				process.finish();
 			}
@@ -272,12 +326,13 @@ class FfmpegProcessTest {
 	@Test
 	void rejectsWrongFrameSize(@TempDir Path dir) throws IOException {
 		String ffmpeg = ffmpeg();
-		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, EncodingPreset.MP4_DEFAULT.arguments(), 16, 16, 30, 0, dir.resolve("clip.mp4"), dir.resolve("export.log"))) {
+		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, EncodingPreset.MP4_DEFAULT.arguments(), FrameFormat.RGBA, 16, 16, 30, 0, dir.resolve("clip.mp4"), dir.resolve("export.log"))) {
 			assertThrows(IllegalArgumentException.class, () -> process.writeFrame(ByteBuffer.allocate(10)));
 		}
+		ProcessHandle.current().children().filter(child -> child.info().command().orElse("").contains("ffmpeg")).forEach(child -> child.onExit().join());
 	}
 
-	private static String ffmpeg() {
+	static String ffmpeg() {
 		String command = System.getProperty("momenton.ffmpeg", "ffmpeg");
 		boolean runs;
 		try {
