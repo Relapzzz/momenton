@@ -22,7 +22,6 @@
 		"client.ServerStatePlayerListHudAccessor",
 		"client.SnapshotDirtyClientChunkManagerMixin",
 		"client.SnapshotDirtyClientPlayNetworkHandlerMixin",
-		"client.SnapshotDirtyLightStorageMixin",
 		"client.SnapshotDirtyWorldChunkMixin",
 		"client.TextFieldWidgetAccessor",
 		"client.audio.SoundEngineMixin",

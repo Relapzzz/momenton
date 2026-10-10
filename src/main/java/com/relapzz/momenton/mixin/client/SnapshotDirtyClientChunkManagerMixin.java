@@ -20,11 +20,16 @@ import java.util.function.Consumer;
 public class SnapshotDirtyClientChunkManagerMixin {
 	@Inject(method = "loadChunkFromPacket(IILnet/minecraft/network/PacketByteBuf;Ljava/util/Map;Ljava/util/function/Consumer;)Lnet/minecraft/world/chunk/WorldChunk;", at = @At("HEAD"))
 	private void momenton$chunkLoaded(int x, int z, PacketByteBuf buf, Map<Heightmap.Type, long[]> heightmaps, Consumer<ChunkData.BlockEntityVisitor> blockEntities, CallbackInfoReturnable<WorldChunk> info) {
-		WorldSnapshot.markDirty(ChunkPos.toLong(x, z));
+		WorldSnapshot.markDirtyAround(x, z);
+	}
+
+	@Inject(method = "unload(Lnet/minecraft/util/math/ChunkPos;)V", at = @At("HEAD"))
+	private void momenton$chunkUnloaded(ChunkPos pos, CallbackInfo info) {
+		WorldSnapshot.markDirtyAround(pos.x, pos.z);
 	}
 
 	@Inject(method = "onChunkBiomeData(IILnet/minecraft/network/PacketByteBuf;)V", at = @At("HEAD"))
 	private void momenton$biomesChanged(int x, int z, PacketByteBuf buf, CallbackInfo info) {
-		WorldSnapshot.markDirty(ChunkPos.toLong(x, z));
+		WorldSnapshot.markDirty(x, z);
 	}
 }
