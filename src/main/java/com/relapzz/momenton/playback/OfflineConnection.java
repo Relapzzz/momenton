@@ -4,6 +4,7 @@ import com.mojang.authlib.GameProfile;
 import com.relapzz.momenton.Momenton;
 import com.relapzz.momenton.format.ActionCodec;
 import com.relapzz.momenton.format.ReplayMetadata;
+import com.relapzz.momenton.mixin.client.ServerStateItemCooldownManagerAccessor;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -36,6 +37,7 @@ import net.minecraft.network.packet.s2c.play.UnloadChunkS2CPacket;
 import net.minecraft.network.state.ConfigurationStates;
 import net.minecraft.network.state.PlayStateFactories;
 import net.minecraft.resource.featuretoggle.FeatureFlags;
+import net.minecraft.scoreboard.Scoreboard;
 import net.minecraft.server.ServerLinks;
 import net.minecraft.util.math.ChunkPos;
 
@@ -123,7 +125,18 @@ public final class OfflineConnection {
 		} else {
 			feed(new PlayerRespawnS2CPacket(spawn, PlayerRespawnS2CPacket.KEEP_ALL));
 		}
+		clearServerState();
 		feed(new ChunkLoadDistanceS2CPacket(join.viewDistance()));
+	}
+
+	private void clearServerState() {
+		Scoreboard scoreboard = client.world.getScoreboard();
+		List.copyOf(scoreboard.getTeams()).forEach(scoreboard::removeTeam);
+		List.copyOf(scoreboard.getObjectives()).forEach(scoreboard::removeObjective);
+		client.inGameHud.getBossBarHud().clear();
+		client.inGameHud.getPlayerListHud().clear();
+		((ServerStateItemCooldownManagerAccessor) client.player.getItemCooldownManager()).momenton$getEntries().clear();
+		client.player.getActiveStatusEffects().clear();
 	}
 
 	private void clearWorld(CommonPlayerSpawnInfo spawn, List<Packet<? super ClientPlayPacketListener>> snapshot) {
