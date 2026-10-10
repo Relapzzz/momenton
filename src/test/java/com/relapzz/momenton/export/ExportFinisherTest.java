@@ -167,7 +167,7 @@ class ExportFinisherTest {
 
 	private static Path video(String ffmpeg, Path dir) throws IOException {
 		Path video = dir.resolve("video.mp4");
-		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, EncodingPreset.MP4_DEFAULT.arguments(), 16, 16, 30, 0, video, dir.resolve("export.log"))) {
+		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, EncodingPreset.MP4_DEFAULT.arguments(), FrameFormat.RGBA, 16, 16, 30, 0, video, dir.resolve("export.log"))) {
 			ByteBuffer frame = ByteBuffer.allocate(16 * 16 * 4);
 			for (int i = 0; i < 60; i++) {
 				process.writeFrame(frame);
