@@ -53,7 +53,7 @@ public final class FrameTrack {
 	/** The pose recorded at or just before {@code tick + tickProgress}, or null if the track is empty. */
 	@Nullable
 	public Pose sample(int tick, float tickProgress) {
-		return count == 0 ? null : at(search(tick + tickProgress));
+		return count == 0 ? null : at(search(tick + (double) tickProgress));
 	}
 
 	/** Index of the last record whose timestamp is at or before {@code key}. */
