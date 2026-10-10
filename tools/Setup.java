@@ -118,6 +118,8 @@ public class Setup {
 						counts.containsKey("PlayPackets.INITIALIZE_BORDER")
 								&& counts.containsKey("PlayPackets.PLAYER_ABILITIES_S2C")
 								&& counts.getOrDefault("PlayPackets.GAME_EVENT", 0) >= 4);
+				check(name + " carries the command tree, or replayed chat marks every command as unknown",
+						counts.containsKey("PlayPackets.COMMANDS"));
 				int objective = order.indexOf("PlayPackets.SET_OBJECTIVE");
 				int score = order.indexOf("PlayPackets.SET_SCORE");
 				check(name + " adds an objective before any score, or the client drops the scores",

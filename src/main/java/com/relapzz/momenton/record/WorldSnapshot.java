@@ -1,7 +1,12 @@
 package com.relapzz.momenton.record;
 
 import com.mojang.datafixers.util.Pair;
+import com.relapzz.momenton.Momenton;
 import com.relapzz.momenton.mixin.client.PlayerListS2CPacketAccessor;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.client.network.ClientPlayerEntity;
@@ -57,8 +62,19 @@ import java.util.Set;
  * with the same codec, and applies them through the same vanilla handlers. There is nothing to write
  * on the playback side at all.
  */
-final class WorldSnapshot {
+public final class WorldSnapshot {
+	private static final LongSet dirty = new LongOpenHashSet();
+	private static Long2ObjectMap<Cached> cache = new Long2ObjectOpenHashMap<>();
+
 	private WorldSnapshot() {
+	}
+
+	public static void markDirty(long chunkPos) {
+		if (Recorder.isRecording()) {
+			dirty.add(chunkPos);
+		} else {
+			cache.clear();
+		}
 	}
 
 	/** Every packet needed to rebuild the current world, in the order a fresh join would send them. */
@@ -152,10 +168,27 @@ final class WorldSnapshot {
 		}
 
 		loaded.sort(Comparator.comparingLong(chunk -> playerChunk.getSquaredDistance(chunk.getPos())));
+		List<WorldChunk> stale = loaded.stream().filter(chunk -> {
+			Cached cached = cache.get(chunk.getPos().toLong());
+			return cached == null || cached.chunk() != chunk || dirty.contains(chunk.getPos().toLong());
+		}).toList();
 		LightingProvider light = world.getChunkManager().getLightingProvider();
-		packets.addAll(loaded.parallelStream()
-				.map(chunk -> (Packet<?>) new ChunkDataS2CPacket(chunk, light, null, null))
-				.toList());
+		List<ChunkDataS2CPacket> built = stale.parallelStream()
+				.map(chunk -> new ChunkDataS2CPacket(chunk, light, null, null))
+				.toList();
+		for (int i = 0; i < stale.size(); i++) {
+			cache.put(stale.get(i).getPos().toLong(), new Cached(stale.get(i), built.get(i)));
+		}
+
+		Long2ObjectMap<Cached> kept = new Long2ObjectOpenHashMap<>(loaded.size());
+		for (WorldChunk chunk : loaded) {
+			Cached cached = cache.get(chunk.getPos().toLong());
+			kept.put(chunk.getPos().toLong(), cached);
+			packets.add(cached.packet());
+		}
+		cache = kept;
+		dirty.clear();
+		Momenton.LOGGER.info("Snapshot rebuilt {} of {} chunks", stale.size(), loaded.size());
 	}
 
 	/**
@@ -220,5 +253,8 @@ final class WorldSnapshot {
 				packets.add(new EntityAttachS2CPacket(entity, leashable.getLeashHolder()));
 			}
 		}
+	}
+
+	private record Cached(WorldChunk chunk, ChunkDataS2CPacket packet) {
 	}
 }

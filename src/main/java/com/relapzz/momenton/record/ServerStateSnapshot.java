@@ -9,6 +9,7 @@ import net.minecraft.client.gui.hud.ClientBossBar;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.network.packet.Packet;
 import net.minecraft.network.packet.s2c.play.BossBarS2CPacket;
+import net.minecraft.network.packet.s2c.play.CommandTreeS2CPacket;
 import net.minecraft.network.packet.s2c.play.CooldownUpdateS2CPacket;
 import net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlayerAbilitiesS2CPacket;
@@ -34,6 +35,11 @@ final class ServerStateSnapshot {
 	}
 
 	static void capture(MinecraftClient client, List<Packet<?>> packets) {
+		CommandTreeS2CPacket commands = SessionSetup.commandTree();
+		if (commands != null) {
+			packets.add(commands);
+		}
+
 		ClientWorld world = client.world;
 		addScoreboard(world.getScoreboard(), packets);
 
