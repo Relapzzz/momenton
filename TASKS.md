@@ -45,14 +45,18 @@ Written but unobserved work goes in **Not yet verified**.
 - **Third in-game run (2026-10-10, user):** export finished and saved (7938 of 7938 frames, 32 fps,
   ffmpeg done 2.9 s after the last frame); sword dip observed correct. Timing log showed `copy`
   (map + flip) at 26 ms of a 31 ms frame: readback buffers lacked `USAGE_HINT_CLIENT_STORAGE`
-  (`GL_CLIENT_STORAGE_BIT`), so the CPU read uncached memory; added (`1a7241d`, unverified - next log's
-  `copy` should drop to a few ms). Dying mobs vibrated in exports (user: not seen at 1x): the replay
+  (`GL_CLIENT_STORAGE_BIT`); added (`1a7241d`) and measured on the fourth run: no change (`copy` 24.9 ms).
+  On the ARB path readable buffers are persistently mapped, so the cost is the CPU reading slow
+  memory; next: parallel copy off the render thread. Dying mobs vibrated in exports (user: not seen at 1x): the replay
   world had simulation distance 0 (the join's value; singleplayer sends the real one right after
   join, before F9), so corpses outside the viewer's chunk stopped advancing `deathTime` and their tilt
   snapped back every tick. Playback now applies the simulation distance a singleplayer client gets
   (`c0abdad`) and new snapshots record the live value (`ecace64`); `tools/Deaths` counts affected
   deaths (12 of 38 in `2026-10-10_09-42-39`). The agent's analysis says 1x replay should show it too;
   unconfirmed.
+- **Fourth run (2026-10-10, user):** Esc during export left the game Not Responding after "Export
+  cancelled after 1017 of 7800 frames"; temporaries left behind. User reports the death jitter is not
+  visible in 1x replay, only in exports (fix `c0abdad` not yet checked in an export).
 - **First in-game run (2026-10-10, user):** `runClient` launches with every mixin; on the new
   build playback, seek and pause work. Observed broken and fixed since: ffmpeg "not found" after
   `winget install ffmpeg` (a process started before the install keeps the old PATH; discovery now
