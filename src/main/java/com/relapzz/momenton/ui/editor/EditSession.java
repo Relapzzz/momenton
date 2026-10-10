@@ -7,11 +7,12 @@ import com.relapzz.momenton.edit.Project;
 import com.relapzz.momenton.edit.Timeline;
 import com.relapzz.momenton.edit.TimelineResolver;
 import com.relapzz.momenton.edit.UndoStack;
+import com.relapzz.momenton.playback.ReplayScreenInput;
 import com.relapzz.momenton.playback.ReplaySession;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.ChatScreen;
 import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -28,6 +29,7 @@ public final class EditSession {
 	private HudToggles hud;
 	private TimelineResolver resolver;
 	private Timeline resolved;
+	private Screen embedded;
 	private boolean wanted = true;
 	private boolean started;
 	private int clipIndex;
@@ -56,7 +58,7 @@ public final class EditSession {
 		if (client.currentScreen == session.screen) {
 			session.screen.close();
 		} else {
-			client.setScreen(session.screen);
+			session.show(client);
 		}
 	}
 
@@ -74,8 +76,45 @@ public final class EditSession {
 		}
 		session.started = true;
 		Screen current = client.currentScreen;
-		if (session.wanted && (current == null || current instanceof HandledScreen<?> || current instanceof ChatScreen)) {
-			client.setScreen(session.screen);
+		if (session.wanted && (current == null || ReplayScreenInput.isReplayScreen(current))) {
+			session.show(client);
+		}
+	}
+
+	public static boolean host(MinecraftClient client, @Nullable Screen next) {
+		EditSession session = active;
+		if (session == null || !session.hosts(client) || next != null && !ReplayScreenInput.isReplayScreen(next)) return false;
+		session.embed(next);
+		return true;
+	}
+
+	@Nullable
+	public static Screen replayScreen(MinecraftClient client) {
+		EditSession session = active;
+		return session != null && session.hosts(client) ? session.embedded : client.currentScreen;
+	}
+
+	private boolean hosts(MinecraftClient client) {
+		return wanted && client.currentScreen == screen && ReplaySession.isPlaying();
+	}
+
+	private void show(MinecraftClient client) {
+		if (ReplayScreenInput.isReplayScreen(client.currentScreen)) {
+			embedded = client.currentScreen;
+			client.currentScreen = null;
+		}
+		client.setScreen(screen);
+	}
+
+	private void embed(@Nullable Screen next) {
+		if (embedded != null) {
+			embedded.removed();
+			ScreenEvents.remove(embedded).invoker().onRemove(embedded);
+		}
+		embedded = next;
+		if (next != null) {
+			next.onDisplayed();
+			next.init(screen.width, screen.height);
 		}
 	}
 
@@ -130,6 +169,22 @@ public final class EditSession {
 
 	void dismissed() {
 		wanted = false;
+	}
+
+	@Nullable
+	Screen embedded() {
+		return embedded;
+	}
+
+	@Nullable
+	Screen release() {
+		Screen released = embedded;
+		embedded = null;
+		return released;
+	}
+
+	void drop() {
+		embed(null);
 	}
 
 	boolean save() {

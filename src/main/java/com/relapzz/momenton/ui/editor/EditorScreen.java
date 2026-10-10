@@ -3,7 +3,10 @@ package com.relapzz.momenton.ui.editor;
 import com.relapzz.momenton.config.MomentonKeybinds;
 import com.relapzz.momenton.edit.Clip;
 import com.relapzz.momenton.edit.HudToggles;
+import com.relapzz.momenton.format.FrameTrack;
+import com.relapzz.momenton.playback.PovDriver;
 import com.relapzz.momenton.playback.ReplaySession;
+import com.relapzz.momenton.playback.UiStateDriver;
 import com.relapzz.momenton.ui.ExportScreen;
 import net.minecraft.client.gui.Click;
 import net.minecraft.client.gui.DrawContext;
@@ -48,6 +51,7 @@ public class EditorScreen extends Screen {
 	@Override
 	protected void init() {
 		session.shown();
+		UiStateDriver.resync(client);
 		int y = height - 56;
 		int x = MARGIN;
 		button(x, y, 20, Text.literal("<"), b -> session.step(-1));
@@ -78,8 +82,17 @@ public class EditorScreen extends Screen {
 
 	@Override
 	public void tick() {
+		Screen hosted = session.embedded();
+		if (hosted != null) hosted.tick();
 		session.follow();
 		if (savedTicks > 0) savedTicks--;
+	}
+
+	@Override
+	public void resize(int width, int height) {
+		super.resize(width, height);
+		Screen hosted = session.embedded();
+		if (hosted != null) hosted.resize(width, height);
 	}
 
 	@Override
@@ -93,6 +106,13 @@ public class EditorScreen extends Screen {
 		undo.active = session.canUndo();
 		redo.active = session.canRedo();
 
+		Screen hosted = session.embedded();
+		if (hosted != null) {
+			FrameTrack.Pose cursor = PovDriver.screenCursor(hosted, client.getRenderTickCounter().getTickProgress(true));
+			hosted.renderWithTooltip(context, cursor == null ? mouseX : (int) (cursor.mouseX() * width),
+					cursor == null ? mouseY : (int) (cursor.mouseY() * height), deltaTicks);
+			context.createNewRootLayer();
+		}
 		context.fill(0, height - 60, width, height, 0xB0000000);
 		if (hudPanel) {
 			context.fill(width - MARGIN - 2 * (TOGGLE_WIDTH + 2) - 2, toggleTop() - 4, width, height - 60, 0xB0000000);
@@ -223,15 +243,29 @@ public class EditorScreen extends Screen {
 	}
 
 	@Override
+	public boolean showsStatusEffects() {
+		Screen hosted = session.embedded();
+		return hosted != null && hosted.showsStatusEffects();
+	}
+
+	@Override
+	public boolean deferSubtitles() {
+		Screen hosted = session.embedded();
+		return hosted != null && hosted.deferSubtitles();
+	}
+
+	@Override
 	public void close() {
 		session.dismissed();
-		super.close();
+		client.setScreen(session.release());
+		UiStateDriver.resync(client);
 	}
 
 	@Override
 	public void removed() {
 		drag = Drag.NONE;
 		session.save();
+		session.drop();
 	}
 
 	private void save() {

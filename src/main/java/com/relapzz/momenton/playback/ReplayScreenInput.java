@@ -24,7 +24,7 @@ public final class ReplayScreenInput {
 		});
 	}
 
-	static boolean isReplayScreen(Screen screen) {
+	public static boolean isReplayScreen(Screen screen) {
 		return screen instanceof HandledScreen<?> || screen instanceof ChatScreen;
 	}
 

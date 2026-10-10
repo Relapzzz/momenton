@@ -4,6 +4,7 @@ import com.relapzz.momenton.Momenton;
 import com.relapzz.momenton.format.UiStateCodec;
 import com.relapzz.momenton.mixin.client.ChatHudAccessor;
 import com.relapzz.momenton.mixin.client.ChatScreenAccessor;
+import com.relapzz.momenton.ui.editor.EditSession;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ChatScreen;
 import net.minecraft.client.gui.screen.Screen;
@@ -115,8 +116,13 @@ public final class UiStateDriver {
 		}
 	}
 
+	public static void resync(MinecraftClient client) {
+		screenChanged = true;
+		showScreen(client);
+	}
+
 	private static void showScreen(MinecraftClient client) {
-		Screen current = client.currentScreen;
+		Screen current = EditSession.replayScreen(client);
 		if (!screenChanged || current != null && !ReplayScreenInput.isReplayScreen(current)) {
 			return;
 		}
