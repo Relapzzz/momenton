@@ -188,8 +188,15 @@ recording begins mid-session and without it there is no initial world to replay 
 **A snapshot is a list of packets, not a bespoke format:** a `GameJoinS2CPacket` rebuilt from the
 live world, then `INITIAL_CHUNKS_COMING`, the world time, the player's position, the chunk-map
 recentre, every loaded chunk nearest-first, the whole tab list (`PlayerListS2CPacket`, every entry, before any
-spawn), a spawn plus tracked data per entity, and the player's inventory (`InventoryS2CPacket` on
-sync id 0). Framing is `[varint length][packet]`, the same as
+spawn), the server state a join sends (`record/ServerStateSnapshot`: teams, objectives, display slots
+and scores; boss bars; tab header and footer; world border; rain state and both gradients; abilities;
+item cooldowns), every entity as vanilla's `EntityTrackerEntry.sendPackets` pairs it (spawn, tracked
+data, attributes, equipment), the recorded player's own tracked data, attributes and status effects,
+then passengers and leashes once every entity exists, and the player's inventory
+(`InventoryS2CPacket` on sync id 0). The rule: a snapshot is what a server sends a fresh client at
+join plus pairing; anything less shows up as missing state until the server happens to resend it.
+A seek clears that server state first (`OfflineConnection.clearServerState`): an objective ADD on an
+existing name throws. Framing is `[varint length][packet]`, the same as
 `setup.bin`. Leading with the join is what makes a snapshot a complete rebuild rather than a patch,
 so seeking never has to undo anything. Only the first load applies the join; a later seek keeps the
 connection and the `ClientWorld` and clears the world in place instead (see Phase 2).
@@ -1196,6 +1203,13 @@ Rules discovered while building. Each one cost a failed run or a wrong fix; do n
   lost every other player, Carpet bots and the recorder's own skin and cape. The snapshot sends it
   before the spawns; `PlayerListS2CPacket` has no entry-list constructor, so `entries` is set
   through `PlayerListS2CPacketAccessor`.
+- Compare a snapshot against what the server sends a fresh client, not against what looks missing:
+  `PlayerManager.onPlayerConnect`, `sendScoreboard`, `sendWorldInfo` and
+  `EntityTrackerEntry.sendPackets` (javap) list it. Wave 8 found equipment, attributes, passengers,
+  the recorded player's own tracked data (skin layers), scoreboard, boss bars, weather, border and
+  cooldowns missing in one pass this way.
+- Snapshot packets are built on the client thread and encoded on the writer thread: each must copy
+  what it holds (checked: `TeamS2CPacket`, attributes, equipment stacks are copied).
 - The replayed player must carry the recorded profile, not the viewer's: skins are looked up by UUID,
   and the dev username (so the UUID) changes on every launch.
 - `frames.bin` and `ENTITY_MOVE` cross-check offline: in first person a frame stamped tick T matches

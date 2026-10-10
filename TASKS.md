@@ -57,10 +57,15 @@ Written but unobserved work goes in **Not yet verified**.
 ## Current state
 
 - Phases 0-2 complete and observed. Phases 3-7 written; much of it observed in five in-game runs on
-  2026-10-10 (see below). Waves 0-7 merged on `main`.
-- Last build (2026-10-10, after Wave 7): `./gradlew build --offline --rerun-tasks` green, 93 tests, 0
+  2026-10-10 (see below). Waves 0-8 merged on `main`.
+- Last build (2026-10-10, after Wave 8): `./gradlew build --offline --rerun-tasks` green, 93 tests, 0
   skipped, 0 failed; `checkReplay` ALL PASS (Inspect, Setup, Motion, Swing, Boundary) on
-  `2026-10-10_09-42-39`; 34 client mixins; no OpenGL imports. All agent worktrees removed.
+  `2026-10-10_09-42-39`; 38 client mixins; no OpenGL imports. All agent worktrees removed.
+- The user tests in their own Modrinth profile (VulkanMod, HeroBot, PvP client mods):
+  `C:/Users/<user>/AppData/Roaming/ModrinthApp/profiles/Asmeus Optimized/` (`logs/latest.log`,
+  `momenton/recordings/`, `mods/momenton-1.0.0.jar`). Their first recording there,
+  `2026-10-10_17-58-32.momenton` (776 ticks, mace practice map, a HeroBot), predates Wave 8 and fails
+  the new Setup check, as it should.
 - Last observed export (fifth run): 1080p60 Quick Sync, 7938 frames in 142 s (57 fps, about real
   time), plays correctly. Per frame: render ~7 ms, copy ~42 ms off-thread on 4 threads at ~470 MB/s
   aggregate (reading GPU-mapped memory is the limit). Wave 6 then added GPU NV12 conversion (3.1 MB
@@ -70,6 +75,30 @@ Written but unobserved work goes in **Not yet verified**.
   back; mic track; the main test file) and `2026-10-10_09-02-53.momenton` (1596 ticks; Nether at
   1142 and back at 1482; its mic entry predates `4d582d2`, so the offline tools reject it - re-zip a
   copy to check it). Exports land in `run/momenton/exports/`.
+
+### Wave 8 (merged, unverified): snapshot parity with a real join
+
+The seventh run (user's profile): players visible but the recorded player has no skin layers; armor
+bar empty until later; the HeroBot's armor and held items invisible. Root cause from the recording and
+javap: the snapshot sent spawn and tracked data only, and nothing for the recorded player, while a
+real join plus vanilla pairing also sends attributes, equipment, passengers, leashes, and the
+scoreboard, boss bars, tab header, border, weather, abilities, cooldowns and the player's own tracked
+data and effects. The recording's stream also had 1550 team and 475 score updates aimed at teams and
+objectives the replay never knew (below-name scores, sidebars, team colours).
+
+- `9275c8e` (`WorldSnapshot`): attributes and equipment per living entity; the recorded player's
+  tracked data (skin layers, main arm, absorption), attributes (armor bar) and status effects;
+  passengers (holograms riding players, vehicles) and leashes after every spawn.
+- `949f197` (`ServerStateSnapshot`, `OfflineConnection`, four `ServerState*Accessor` mixins): teams,
+  objectives, display slots, scores; boss bars; tab header/footer; world border; rain state and
+  gradients; abilities; item cooldowns. A seek clears scoreboard, boss bars, tab header, cooldowns and
+  the player's effects before re-applying (objective ADD on an existing name throws). `tools/Setup`
+  checks border/abilities/weather and objective-before-score on recordings with `player`.
+
+Audit for the user's ban and performance questions: the recorder only reads inbound packets in
+`ClientConnection.channelRead0` and sends nothing; playback is offline. Costs: every packet is
+re-encoded on the netty thread before vanilla handles it (unmeasured), and each snapshot blocks the
+client thread (22 ms at F9, 9 ms every 25 s in the user's log; a visible hitch mid-fight).
 
 ### Wave 7 (merged, unverified): players and skins
 
@@ -143,6 +172,10 @@ in `2026-10-10_09-42-39`): the tab list arrived before F9 and was never in a sna
   playback by Disconnect/closing the window, third person and crouch, custom payload filter (needs a
   server channel no mod claims), recording HUD indicator over an open screen.
 - **Wave 7:** players, Carpet bots, own skin and cape in a new recording; tab list after a seek.
+  Seventh run: players and bots visible with skins (layers missing, fixed in Wave 8).
+- **Wave 8:** skin layers on the recorded player; armor bar from the first frame; bot armor and held
+  items; below-name scores, sidebar, team colours, boss bars, tab header/footer, rain, border, pearl
+  and shield cooldowns from the first frame and after a backward seek; holograms riding players.
 - **VulkanMod:** launch and use reported fine; NV12 export upright with right colours unchecked.
 
 ## Known issues
@@ -173,6 +206,15 @@ in `2026-10-10_09-42-39`): the tab list arrived before F9 and was never in a sna
   spear jabs dip (new recordings carry the reset events).
 - Render distance is a capture-time decision; view bobbing on the driven player is unchecked;
   sprinting is recorded but not applied; the driven player is never `onGround`.
+- Server resource packs are not re-applied at playback: the pack loaded while recording (a world's
+  `resources.zip` or a server's pack) is unloaded when the world is left, so the replay renders without
+  it (user's log: `server/00000000/...` gone at 17:59:14). Next wave.
+- Snapshot hitch on the client thread (22 ms at F9, 9 ms per 25 s); chunk packets dominate. Next wave:
+  reuse unchanged chunks' encoded packets between snapshots, and measure the per-packet netty cost.
+- A replay starting or seeking while the recorded player rides shows "Press Shift to dismount"
+  (vanilla's `onEntityPassengersSet` overlay).
+- A cooldown running at a snapshot restarts its sweep from full (the packet has no start tick); a boss
+  bar mid-animation is captured up to 100 ms behind.
 - Tab entries added after a snapshot survive a backward seek past it (tab list only, harmless);
   `shouldTickTimeOfDay` is private (up to 1 s time drift); the
   rebuilt join keeps the original `seed` and `isFlat`; the `local = false` registry flag in
@@ -261,23 +303,22 @@ Complete, observed.
 
 ## Next session
 
-The user runs this pass with `gradlew runClient` or their own instance (copy
-`build/libs/momenton-1.0.0.jar`) and reports each step as pass or fail; on a failure,
-`logs/latest.log` (search "prior to sending player info") and `momenton/export.log`.
+Copy `build/libs/momenton-1.0.0.jar` into the user's profile `mods/` (replacing the old one) and make
+NEW recordings; recordings from before Wave 8 keep the old gaps. Report pass or fail per step; on a
+failure, the recording name (the coordinator runs the tools on it from the profile's
+`momenton/recordings/`) and the profile's `logs/latest.log`.
 
-1. Launch: no mixin error (34 client mixins).
-2. **Players (Wave 7).** Make a NEW recording (old ones lack `player` and still show Steve): on a
-   server with other players already online when F9 is pressed, and one who joins during it. Replay:
-   every player visible with skin and cape, no "prior to sending player info" in the log.
-3. **Carpet / HeroBot.** In singleplayer spawn a bot, then F9, then spawn a second: both visible in the
-   replay with their skins.
-4. **Own skin.** The replayed player and the inventory model show your skin and cape, in first person,
-   third person and front view. Seek backward once and check again.
-5. Then send `./gradlew checkReplay` output for that recording (the new tab-list check runs on it).
-6. Remaining steps from the previous pass that were not reported: NV12 export speed and picture,
-   commentary tracks, presets, cancel, failure screen, edited export, editor, browser and settings,
-   survival recording (see `IMPLEMENTATION_PLAN.md` and Not yet verified for what each checks).
-7. Under VulkanMod: one NV12 export, upright with correct colours.
+1. Launch: no mixin error (38 client mixins).
+2. **Recorded player:** skin with layers (hat, jacket, sleeves) and cape in third person, front view and
+   the inventory model; armor bar and absorption hearts from the first frame; effect icons.
+3. **Bots and players:** HeroBot/Carpet bots and server players show armor, held items, offhand
+   (shield/totem), skin layers. Seek backward past a snapshot (25 s) and check again.
+4. **Server UI:** on a server with a sidebar, health or rank under nametags, coloured team names, a boss
+   bar and a tab header/footer: all present at the first frame and after a backward seek, nothing
+   doubled. Floating holograms and leaderboards present; ones riding players follow them.
+5. **PvP:** ender pearl and shield (axe-disabled) cooldown overlays on the hotbar; totem pop; crits;
+   others' shield blocking; hurt tilt; knockback. Compare a short OBS clip side by side.
+6. **World:** start a recording while it rains: the replay rains. World border visible near it.
+7. Remaining older steps (export, editor, commentary, presets) when convenient.
 
-After the pass: fix what fails (root cause first), tick what passed, then Phase 8 hardening and the
-phase gates.
+Then the next wave: server resource packs at playback, snapshot hitch, mount overlay.
