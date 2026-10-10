@@ -33,7 +33,8 @@ public record ReplayMetadata(
 		Double micStartTick,
 		Integer micSampleRate,
 		List<ModEntry> mods,
-		List<String> resourcePacks) {
+		List<String> resourcePacks,
+		PlayerEntry player) {
 
 	public static final int FORMAT_VERSION = 2;
 
@@ -45,7 +46,7 @@ public record ReplayMetadata(
 			Integer framebufferHeight, Integer guiScale) {
 		this(formatVersion, minecraftVersion, modVersion, createdAtEpochMs, durationTicks, framesRendered, chunkTicks,
 				worldName, initialDimension, chunks, dimensionChanges, framebufferWidth, framebufferHeight, guiScale,
-				null, null, null, null);
+				null, null, null, null, null);
 	}
 
 	/** One {@code chunk_NNNN.bin} / {@code ui_NNNN.bin} pair, covering {@code [startTick, endTick)}. */
@@ -56,6 +57,9 @@ public record ReplayMetadata(
 	}
 
 	public record ModEntry(String id, String version) {
+	}
+
+	public record PlayerEntry(String uuid, String name) {
 	}
 
 	/** The world this was recorded in, or a placeholder for recordings made before it was stored. */

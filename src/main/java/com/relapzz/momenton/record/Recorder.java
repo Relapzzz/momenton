@@ -567,7 +567,8 @@ public final class Recorder {
 				micStartTick,
 				micStartTick == null ? null : WavWriter.SAMPLE_RATE,
 				mods,
-				resourcePacks);
+				resourcePacks,
+				null);
 	}
 
 	/** The save name in singleplayer, the server entry's name otherwise. Vanilla resolves it this way. */

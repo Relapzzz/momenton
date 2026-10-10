@@ -18,7 +18,7 @@ class ReplayDependenciesTest {
 
 	private static ReplayMetadata recorded(List<ReplayMetadata.ModEntry> mods, List<String> packs) {
 		return new ReplayMetadata(ReplayMetadata.FORMAT_VERSION, "1.21.11", "1.0.0", 0L, 1, 0L, ReplayWriter.CHUNK_TICKS,
-				"World", "minecraft:overworld", List.of(), List.of(), 1920, 1080, 3, null, null, mods, packs);
+				"World", "minecraft:overworld", List.of(), List.of(), 1920, 1080, 3, null, null, mods, packs, null);
 	}
 
 	@Test
