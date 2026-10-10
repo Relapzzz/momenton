@@ -1,7 +1,10 @@
 package com.relapzz.momenton.record;
 
+import com.relapzz.momenton.mixin.client.PlayerListS2CPacketAccessor;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.client.network.PlayerListEntry;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityPosition;
@@ -13,6 +16,7 @@ import net.minecraft.network.packet.s2c.play.EntitySpawnS2CPacket;
 import net.minecraft.network.packet.s2c.play.EntityTrackerUpdateS2CPacket;
 import net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket;
 import net.minecraft.network.packet.s2c.play.InventoryS2CPacket;
+import net.minecraft.network.packet.s2c.play.PlayerListS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
 import net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket;
 import net.minecraft.util.math.ChunkPos;
@@ -21,7 +25,9 @@ import net.minecraft.world.chunk.light.LightingProvider;
 import net.minecraft.world.chunk.WorldChunk;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 
@@ -71,8 +77,34 @@ final class WorldSnapshot {
 				List.copyOf(player.playerScreenHandler.getStacks()), player.currentScreenHandler.getCursorStack()));
 
 		addChunks(client, world, player, packets);
+		packets.add(playerList(client.getNetworkHandler()));
 		addEntities(world, player, packets);
 		return packets;
+	}
+
+	private static PlayerListS2CPacket playerList(ClientPlayNetworkHandler handler) {
+		Collection<PlayerListEntry> listed = handler.getListedPlayerListEntries();
+		PlayerListS2CPacket packet = new PlayerListS2CPacket(EnumSet.of(
+				PlayerListS2CPacket.Action.ADD_PLAYER,
+				PlayerListS2CPacket.Action.UPDATE_GAME_MODE,
+				PlayerListS2CPacket.Action.UPDATE_LISTED,
+				PlayerListS2CPacket.Action.UPDATE_LATENCY,
+				PlayerListS2CPacket.Action.UPDATE_DISPLAY_NAME,
+				PlayerListS2CPacket.Action.UPDATE_LIST_ORDER,
+				PlayerListS2CPacket.Action.UPDATE_HAT), List.of());
+		((PlayerListS2CPacketAccessor) packet).setEntries(handler.getPlayerList().stream()
+				.map(entry -> new PlayerListS2CPacket.Entry(
+						entry.getProfile().id(),
+						entry.getProfile(),
+						listed.contains(entry),
+						entry.getLatency(),
+						entry.getGameMode(),
+						entry.getDisplayName(),
+						entry.shouldShowHat(),
+						entry.getListOrder(),
+						null))
+				.toList());
+		return packet;
 	}
 
 	/**

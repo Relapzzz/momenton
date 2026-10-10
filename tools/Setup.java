@@ -107,6 +107,12 @@ public class Setup {
 					order.indexOf("PlayPackets.SET_CHUNK_CACHE_CENTER") >= 0
 							&& order.indexOf("PlayPackets.SET_CHUNK_CACHE_CENTER")
 									< order.indexOf("PlayPackets.LEVEL_CHUNK_WITH_LIGHT"));
+			if (m.player() != null)
+				check(name + " carries the tab list BEFORE any entity, or every player spawn is dropped "
+								+ "and every skin falls back to Steve",
+						order.indexOf("PlayPackets.PLAYER_INFO_UPDATE") >= 0
+								&& order.indexOf("PlayPackets.PLAYER_INFO_UPDATE")
+										< order.indexOf("PlayPackets.ADD_ENTITY"));
 		}
 
 		// A snapshot must reach at least as far as the server streams, or the outer ring of chunks the
