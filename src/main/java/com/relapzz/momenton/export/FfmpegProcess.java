@@ -242,10 +242,8 @@ public final class FfmpegProcess implements AutoCloseable {
 		return result;
 	}
 
-	public static void mux(String command, Path video, Path pcm, Path output, Path logPath, Consumer<Process> started, DoubleConsumer seconds) throws IOException {
-		List<String> commandLine = List.of(command, "-nostdin", "-y", "-i", video.toString(),
-				"-f", "s16le", "-ar", Integer.toString(LoopbackRenderer.SAMPLE_RATE), "-ac", "2", "-i", pcm.toString(),
-				"-c:v", "copy", "-c:a", audioCodec(output), "-b:a", "192k", "-shortest", output.toString());
+	public static void mux(String command, Path video, MuxAudio audio, Path output, Path logPath, Consumer<Process> started, DoubleConsumer seconds) throws IOException {
+		List<String> commandLine = muxCommand(command, video, audio, output);
 		Process process = new ProcessBuilder(commandLine).redirectErrorStream(true).start();
 		started.accept(process);
 		StringBuilder text = new StringBuilder(header(commandLine));
@@ -268,6 +266,52 @@ public final class FfmpegProcess implements AutoCloseable {
 			Thread.currentThread().interrupt();
 			throw new InterruptedIOException();
 		}
+	}
+
+	static List<String> muxCommand(String command, Path video, MuxAudio audio, Path output) {
+		List<String> line = new ArrayList<>(List.of(command, "-nostdin", "-y", "-i", video.toString()));
+		List<String> graph = new ArrayList<>();
+		List<String> titles = new ArrayList<>();
+		if (audio.gameVolume() > 0) {
+			line.addAll(List.of("-f", "s16le", "-ar", Integer.toString(LoopbackRenderer.SAMPLE_RATE), "-ac", "2", "-i", audio.game().toString()));
+			graph.add("[" + (graph.size() + 1) + ":a]volume=" + audio.gameVolume() + "[a" + graph.size() + "]");
+			titles.add("Game");
+		}
+		if (audio.mic() != null && audio.micVolume() > 0) {
+			line.addAll(List.of("-f", "s16le", "-ar", Integer.toString(audio.micRate()), "-ac", "1", "-i", audio.mic().toString()));
+			graph.add("[" + (graph.size() + 1) + ":a]volume=" + audio.micVolume() + "[a" + graph.size() + "]");
+			titles.add("Commentary");
+		}
+		List<String> outputs = new ArrayList<>();
+		for (int i = 0; i < graph.size(); i++) {
+			outputs.add("[a" + i + "]");
+		}
+		if (audio.mix() && outputs.size() == 2) {
+			graph.add("[a1]pan=stereo|c0=c0|c1=c0[voice]");
+			graph.add("[a0][voice]amix=inputs=2:duration=first:normalize=0[mix]");
+			outputs = List.of("[mix]");
+			titles = List.of("Game and commentary");
+		}
+		if (!graph.isEmpty()) {
+			line.addAll(List.of("-filter_complex", String.join(";", graph)));
+		}
+		line.addAll(List.of("-map", "0:v"));
+		for (String stream : outputs) {
+			line.addAll(List.of("-map", stream));
+		}
+		line.addAll(List.of("-c:v", "copy"));
+		if (!outputs.isEmpty()) {
+			line.addAll(List.of("-c:a", audioCodec(output), "-b:a", "192k"));
+		}
+		for (int i = 0; i < titles.size(); i++) {
+			line.addAll(List.of("-metadata:s:a:" + i, "title=" + titles.get(i), "-metadata:s:a:" + i, "handler_name=" + titles.get(i),
+					"-disposition:a:" + i, i == 0 ? "default" : "0"));
+		}
+		line.addAll(List.of("-shortest", output.toString()));
+		return line;
+	}
+
+	public record MuxAudio(Path game, float gameVolume, Path mic, int micRate, float micVolume, boolean mix) {
 	}
 
 	static String audioCodec(Path output) {

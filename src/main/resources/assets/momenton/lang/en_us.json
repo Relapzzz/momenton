@@ -84,5 +84,12 @@
   "screen.momenton.export.finishing": "Finishing video",
   "screen.momenton.export.encoding": "Encoding the last frames",
   "screen.momenton.export.muxing": "Adding the audio",
-  "screen.momenton.export.cancelling": "Cancelling"
+  "screen.momenton.export.cancelling": "Cancelling",
+  "screen.momenton.export.volume": "Volume",
+  "screen.momenton.export.volume.game": "Game: %s",
+  "screen.momenton.export.volume.voice": "Voice: %s",
+  "screen.momenton.export.volume.muted": "muted",
+  "screen.momenton.export.voice": "Voice",
+  "screen.momenton.export.voice.separate": "Own track",
+  "screen.momenton.export.voice.mixed": "Mixed in"
 }
