@@ -298,7 +298,7 @@ public final class Recorder {
 				join.dimensionIds(),
 				join.maxPlayers(),
 				join.viewDistance(),
-				join.simulationDistance(),
+				world.getSimulationDistance(),
 				join.reducedDebugInfo(),
 				join.showDeathScreen(),
 				join.doLimitedCrafting(),
