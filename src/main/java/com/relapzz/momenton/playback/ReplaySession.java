@@ -34,6 +34,7 @@ public final class ReplaySession {
 	private static boolean disconnecting;
 
 	private final MinecraftClient client;
+	private final Path file;
 	private final ReplayReader reader;
 	private final ReplayMetadata metadata;
 	private final Perspective viewerPerspective;
@@ -49,8 +50,9 @@ public final class ReplaySession {
 	private boolean paused;
 	private boolean advancing;
 
-	private ReplaySession(MinecraftClient client, ReplayReader reader) throws IOException {
+	private ReplaySession(MinecraftClient client, Path file, ReplayReader reader) throws IOException {
 		this.client = client;
+		this.file = file;
 		this.reader = reader;
 		this.metadata = reader.metadata();
 		this.viewerPerspective = client.options.getPerspective();
@@ -76,10 +78,19 @@ public final class ReplaySession {
 		}
 	}
 
-	/** The tick now showing, and the recording's length, for a HUD or a scrubber. */
+	/**
+	 * The tick on screen: every action stamped up to it has been applied and {@link PovDriver} draws
+	 * it. A seek to {@code T} leaves it at {@code T}, and each playback tick after that adds exactly one.
+	 */
 	public static int currentTick() {
 		ReplaySession session = active;
 		return session == null ? 0 : session.tick;
+	}
+
+	@Nullable
+	public static Path file() {
+		ReplaySession session = active;
+		return session == null ? null : session.file;
 	}
 
 	public static int durationTicks() {
@@ -135,7 +146,7 @@ public final class ReplaySession {
 		}
 
 		try {
-			active = new ReplaySession(client, reader);
+			active = new ReplaySession(client, file, reader);
 		} catch (IOException e) {
 			Momenton.LOGGER.error("Could not start playback of {}", file, e);
 			close(reader);
@@ -281,22 +292,23 @@ public final class ReplaySession {
 		try {
 			connection.drainOutbound();
 
-			while (next != null && next.tick() <= tick) {
-				apply(next);
-				next = read();
-			}
-			advanceUi(tick);
-
-			if (next == null) {
+			int target = tick + 1;
+			if (target >= metadata.durationTicks()) {
 				Momenton.LOGGER.info("Playback reached the end at tick {}", tick);
 				stop();
 				return;
 			}
 
+			while (next != null && next.tick() <= target) {
+				apply(next);
+				next = read();
+			}
+			advanceUi(target);
+			tick = target;
+
 			applyPerspective();
 
 			PovDriver.setTick(tick);
-			tick++;
 		} finally {
 			advancing = false;
 		}

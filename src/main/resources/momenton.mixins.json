@@ -21,6 +21,7 @@
 		"client.audio.SoundSystemMixin",
 		"client.export.BlockBufferBuilderPoolMixin",
 		"client.export.ChunkRenderingDataPreparerAccessor",
+		"client.export.ClientWorldAccessor",
 		"client.export.ExportClientMixin",
 		"client.export.ExportGameRendererMixin",
 		"client.export.ExportKeyboardMixin",

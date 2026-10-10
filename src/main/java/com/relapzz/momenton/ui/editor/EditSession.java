@@ -8,7 +8,6 @@ import com.relapzz.momenton.edit.Timeline;
 import com.relapzz.momenton.edit.TimelineResolver;
 import com.relapzz.momenton.edit.UndoStack;
 import com.relapzz.momenton.playback.ReplaySession;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ChatScreen;
 import net.minecraft.client.gui.screen.Screen;
@@ -22,7 +21,6 @@ import java.util.function.UnaryOperator;
 
 public final class EditSession {
 	private static EditSession active;
-	private static boolean listening;
 
 	private final Path replay;
 	private final UndoStack edits;
@@ -43,18 +41,18 @@ public final class EditSession {
 	}
 
 	public static void open(MinecraftClient client, Path replay, int durationTicks) {
-		if (!listening) {
-			ClientTickEvents.END_CLIENT_TICK.register(EditSession::onClientTick);
-			listening = true;
-		}
 		active = new EditSession(replay, load(replay, durationTicks));
 		client.setScreen(null);
 		ReplaySession.open(client, replay);
 	}
 
 	public static void toggle(MinecraftClient client) {
+		if (!ReplaySession.isPlaying()) return;
+		if (active == null) {
+			Path replay = ReplaySession.file();
+			active = new EditSession(replay, load(replay, ReplaySession.durationTicks()));
+		}
 		EditSession session = active;
-		if (session == null || !ReplaySession.isPlaying()) return;
 		if (client.currentScreen == session.screen) {
 			session.screen.close();
 		} else {
@@ -67,7 +65,7 @@ public final class EditSession {
 		return session != null && ReplaySession.isPlaying() && !session.hud.shows(element);
 	}
 
-	private static void onClientTick(MinecraftClient client) {
+	public static void onClientTick(MinecraftClient client) {
 		EditSession session = active;
 		if (session == null) return;
 		if (!ReplaySession.isPlaying()) {
@@ -184,7 +182,7 @@ public final class EditSession {
 
 	int playhead() {
 		Clip clip = edits.timeline().clips().get(clipIndex);
-		return start(clipIndex) + Math.clamp(ReplaySession.currentTick() - clip.startTick(), 0, clip.length());
+		return start(clipIndex) + Math.clamp(ReplaySession.currentTick() - clip.startTick(), 0, clip.length() - 1);
 	}
 
 	void seek(int position) {
@@ -214,14 +212,18 @@ public final class EditSession {
 			relocate();
 			return;
 		}
-		if (tick < last(clip)) return;
+		if (tick < last(clip) || ReplaySession.isPaused()) return;
 		if (clipIndex + 1 < clips.size()) {
 			clipIndex++;
 			int next = clips.get(clipIndex).startTick();
-			if (next != tick) ReplaySession.seek(next);
-		} else if (!ReplaySession.isPaused()) {
+			if (next != tick + 1) ReplaySession.seek(next - 1);
+		} else {
 			ReplaySession.togglePause();
 		}
+	}
+
+	List<Clip> exportRanges() {
+		return resolver().exportRanges();
 	}
 
 	private void relocate() {
@@ -230,9 +232,9 @@ public final class EditSession {
 		selected = Math.min(selected, clips.size() - 1);
 		int tick = ReplaySession.currentTick();
 		Clip current = clips.get(clipIndex);
-		if (tick >= current.startTick() && tick <= last(current)) return;
+		if (contains(current, tick)) return;
 		for (int i = 0; i < clips.size(); i++) {
-			if (tick >= clips.get(i).startTick() && tick < last(clips.get(i))) {
+			if (contains(clips.get(i), tick)) {
 				clipIndex = i;
 				return;
 			}
@@ -240,8 +242,12 @@ public final class EditSession {
 		ReplaySession.seek(current.startTick());
 	}
 
+	private static boolean contains(Clip clip, int tick) {
+		return tick >= clip.startTick() && tick < clip.endTick();
+	}
+
 	private static int last(Clip clip) {
-		return Math.min(clip.endTick(), ReplaySession.durationTicks() - 1);
+		return clip.endTick() - 1;
 	}
 
 	private TimelineResolver resolver() {

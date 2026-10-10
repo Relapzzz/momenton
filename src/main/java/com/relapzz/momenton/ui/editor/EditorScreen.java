@@ -240,7 +240,7 @@ public class EditorScreen extends Screen {
 
 	private void export() {
 		session.dismissed();
-		client.setScreen(new ExportScreen(this, session.replay(), session.timeline().sourceTicks()));
+		client.setScreen(new ExportScreen(this, session.replay(), session.timeline().sourceTicks(), session.exportRanges()));
 	}
 
 	private ButtonWidget button(int x, int y, int buttonWidth, Text text, ButtonWidget.PressAction action) {

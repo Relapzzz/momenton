@@ -7,6 +7,7 @@ import com.relapzz.momenton.record.Recorder;
 import com.relapzz.momenton.record.RecordingHud;
 import com.relapzz.momenton.record.ScreenTracker;
 import com.relapzz.momenton.ui.TitleScreenEntry;
+import com.relapzz.momenton.ui.editor.EditSession;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
@@ -26,6 +27,7 @@ public class MomentonClient implements ClientModInitializer {
 			ScreenTracker.onClientTick(client);
 			Recorder.onClientTick(client);
 			ReplaySession.onClientTick(client);
+			EditSession.onClientTick(client);
 		});
 
 		HudElementRegistry.addLast(Momenton.id("recording_indicator"), new RecordingHud());
