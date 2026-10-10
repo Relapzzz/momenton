@@ -118,7 +118,13 @@ A zip, so each part stays independently seekable and inspectable:
 recording.momenton (zip)
   metadata.json      version, MC/mod version, duration, world name, chunk index, dimension changes,
                      framebufferWidth/Height and guiScale at record start, micStartTick and
-                     micSampleRate (all null in older files or without a mic)
+                     micSampleRate (all null in older files or without a mic), mods (id and
+                     version of each top-level mod, minus builtins, Fabric API modules, Fabric
+                     Loader and Momenton) and resourcePacks (enabled ids bottom to top, server
+                     packs left out) at record start (null in older files, which never warn);
+                     the replay browser compares them with the running game
+                     (format/ReplayDependencies) and shows a warning line with a details tooltip,
+                     never blocking Play
   setup.bin          the configuration-phase packets and the game join, replayed before tick 0
   chunk_0000.bin     length-prefixed actions: [varint type][varint tickDelta][payload]
   snapshot_0000.bin  full world state at that chunk boundary
@@ -549,11 +555,17 @@ from the 1.21.11 bytecode of `SoundEngine` and `SoundSystem`, not taken from Rep
 
 **Mic commentary** is recorded live, because a voice cannot be re-simulated.
 
-- `audio/MicRecorder` opens the default `TargetDataLine` at 48 kHz mono s16 on its own platform
+- `audio/MicRecorder` opens a `TargetDataLine` at 48 kHz mono s16 on its own platform
   thread when recording starts and streams it through `audio/WavWriter` to `.<name>.mic.wav` beside
   the staging directory. The first sample's tick is
   `originTick + (nanoTime at line.start - nanoTime at F9) / 50 ms`, where `originTick` is the next
   frame's fractional tick (`1 + tickProgress`). No microphone logs once and records without one.
+- Settings live in `<gameDir>/config/momenton.json` (`config/MomentonConfig`, Gson, read on first
+  use): `micEnabled` (default true) and `micDevice` (a mixer name, `""` for the system default).
+  The unbound toggle key and `ui/SettingsScreen` (from the replay browser) both flip and save
+  `micEnabled`. The screen cycles the capture mixers that support the format and shows a peak meter
+  (`audio/MicMeter`, -60 to 0 dB). A saved device that is gone falls back to the default with one
+  warning.
 - At stop, after `ReplayWriter.finish` has written the zip, `MicTrack.attach` adds the WAV as a
   STORED `audio/mic.wav` entry through a zip `FileSystem` and deletes the loose file; metadata carries
   `micStartTick` and `micSampleRate`. STORED keeps the entry seekable for playback.
@@ -916,8 +928,9 @@ toggles taking effect immediately.
 
 `audio/MicRecorder.java`, `audio/WavWriter.java`, `audio/MicTrack.java`, `audio/MicPlayback.java`,
 `ReplayMetadata.micStartTick/micSampleRate`, an unbound mic toggle key (see Audio, mic commentary).
-Recording, storage and in-sync playback are written (Wave 5). Still to come (Wave 6): a device picker,
-and the mic as a second audio track in export with per-track gain and mute.
+Recording, storage and in-sync playback are written (Wave 5). The device picker, on/off setting and
+level meter live in `ui/SettingsScreen` and `config/momenton.json`. Still to come: the mic as a
+second audio track in export with per-track gain and mute.
 
 **Done when:** an export carries game audio and commentary on separate tracks, both in sync.
 

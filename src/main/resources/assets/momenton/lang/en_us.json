@@ -84,5 +84,22 @@
   "screen.momenton.export.finishing": "Finishing video",
   "screen.momenton.export.encoding": "Encoding the last frames",
   "screen.momenton.export.muxing": "Adding the audio",
-  "screen.momenton.export.cancelling": "Cancelling"
+  "screen.momenton.export.cancelling": "Cancelling",
+  "screen.momenton.settings": "Settings",
+  "screen.momenton.settings.title": "Momenton Settings",
+  "screen.momenton.settings.mic": "Commentary recording",
+  "screen.momenton.settings.device": "Input device",
+  "screen.momenton.settings.device.default": "System default",
+  "screen.momenton.settings.device.missing": "%s (not found)",
+  "screen.momenton.settings.level": "Input level",
+  "screen.momenton.settings.no_input": "No input",
+  "screen.momenton.mismatch.missing": "Missing mods: %s (replay may fail)",
+  "screen.momenton.mismatch.mods": "Recorded with different mods",
+  "screen.momenton.mismatch.packs": "Recorded with different resource packs",
+  "screen.momenton.mismatch.missing.detail": "Missing now: %s",
+  "screen.momenton.mismatch.missing.hint": "A missing mod that adds blocks, items or entities will likely make the replay fail to play.",
+  "screen.momenton.mismatch.added": "Added since recording: %s",
+  "screen.momenton.mismatch.changed": "Different version: %s",
+  "screen.momenton.mismatch.packs.then": "Resource packs when recorded: %s",
+  "screen.momenton.mismatch.packs.now": "Resource packs now: %s"
 }
