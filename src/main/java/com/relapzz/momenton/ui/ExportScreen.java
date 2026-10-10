@@ -226,7 +226,7 @@ public class ExportScreen extends Screen {
 		last = this;
 		message = Text.empty();
 		client.setScreen(null);
-		ExportSession.start(client, new ExportSettings(replay, exported, w, h, fps, output, command, args, bitrate, cursor.getValue()));
+		ExportSession.start(client, new ExportSettings(replay, exported, w, h, fps, output, command, args, bitrate, cursor.getValue(), 1.0f, 1.0f));
 	}
 
 	private void fail(String key) {

@@ -6,5 +6,5 @@ import java.nio.file.Path;
 import java.util.List;
 
 public record ExportSettings(Path replay, List<Clip> clips, int width, int height, int fps, Path output, String ffmpegCommand,
-		String ffmpegArgs, int bitrate, boolean drawCursor) {
+		String ffmpegArgs, int bitrate, boolean drawCursor, float gameVolume, float micVolume) {
 }
