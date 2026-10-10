@@ -3,6 +3,7 @@ package com.relapzz.momenton.playback;
 import com.mojang.authlib.GameProfile;
 import com.relapzz.momenton.Momenton;
 import com.relapzz.momenton.format.ActionCodec;
+import com.relapzz.momenton.format.ReplayMetadata;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -44,6 +45,7 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * A real {@link ClientConnection} with no socket behind it, so vanilla's own handlers do every bit of
@@ -66,11 +68,11 @@ public final class OfflineConnection {
 
 	private PacketCodec<ByteBuf, Packet<? super ClientPlayPacketListener>> play;
 
-	public OfflineConnection(MinecraftClient client) {
+	public OfflineConnection(MinecraftClient client, ReplayMetadata.PlayerEntry player) {
 		this.client = client;
 		channel.attr(Momenton.PLAYBACK).set(Boolean.TRUE);
 		connection.transitionInbound(ConfigurationStates.S2C,
-				new ClientConfigurationNetworkHandler(client, connection, initialState(client)));
+				new ClientConfigurationNetworkHandler(client, connection, initialState(client, player)));
 	}
 
 	/**
@@ -187,11 +189,14 @@ public final class OfflineConnection {
 	}
 
 	/**
-	 * What the client hands a fresh configuration handler at login, minus the server: base registries
-	 * that {@code setup.bin} is about to replace, vanilla features, and no server identity.
+	 * What the client hands a fresh configuration handler at login, minus the server: the recorded
+	 * player's profile, base registries that {@code setup.bin} is about to replace, vanilla features,
+	 * and no server identity.
 	 */
-	private static ClientConnectionState initialState(MinecraftClient client) {
-		GameProfile profile = client.getGameProfile();
+	private static ClientConnectionState initialState(MinecraftClient client, ReplayMetadata.PlayerEntry player) {
+		GameProfile profile = player == null
+				? client.getGameProfile()
+				: new GameProfile(UUID.fromString(player.uuid()), player.name());
 		return new ClientConnectionState(
 				new ClientChunkLoadProgress(),
 				profile,
