@@ -57,6 +57,12 @@ Written but unobserved work goes in **Not yet verified**.
 - **Fourth run (2026-10-10, user):** Esc during export left the game Not Responding after "Export
   cancelled after 1017 of 7800 frames"; temporaries left behind. User reports the death jitter is not
   visible in 1x replay, only in exports (fix `c0abdad` not yet checked in an export).
+  Fixed (`107cc5b`, unverified): cancel waited without limit on `ffmpeg` exiting on the render thread
+  (`destroyForcibly().onExit().join()`); now it never waits, and a cleanup thread deletes the
+  temporaries with retries (Quick Sync holds the output file ~60 ms after exit). The frame copy now
+  runs on 4 worker threads off the render thread with 4 readback buffers; the log splits `map`,
+  `submit` and `copy ... MB/s`. If MB/s stays near 320 the split does not scale and GPU-side NV12
+  conversion is next.
 - **First in-game run (2026-10-10, user):** `runClient` launches with every mixin; on the new
   build playback, seek and pause work. Observed broken and fixed since: ffmpeg "not found" after
   `winget install ffmpeg` (a process started before the install keeps the old PATH; discovery now
