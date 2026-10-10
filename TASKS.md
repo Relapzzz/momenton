@@ -25,6 +25,23 @@ Written but unobserved work goes in **Not yet verified**.
 
 ## Current state
 
+- **Second in-game run (2026-10-10, user):** block breaking and replayed inventories observed
+  working. Observed broken, root-caused and fixed (written, unverified):
+  - Export froze at the end (Not Responding, no MP4): `FrameGrabber.flush()` waited on GPU fences
+    whose commands were never flushed (`GlGpuFence.awaitCompletion` passes flags 0); the game rendered
+    all 7938 frames at 24 fps and ffmpeg kept pace, then waited 224 s for EOF. Now readback is
+    non-blocking through vanilla's fenced callbacks, the session drains the last frames over extra
+    passes, and `ffmpeg.finish()` plus the mux run on a background thread behind a "Finishing video"
+    screen; ffmpeg is killed only after 60 s without progress (`5525484`).
+  - Export showed the raw replay in slow motion: replaced by a progress overlay drawn after the grab
+    (bar, frames, elapsed, ETA, fps, toggleable preview).
+  - Export speed: 24 fps was CPU-bound (game plus x264 medium on an i5-1235U). Intel Quick Sync
+    (`h264_qsv`, gq17) is probed per session and is the default when it works; software default is
+    x264 superfast crf18 (measured SSIM 0.986 vs 0.983 for the old default, at a quarter of the CPU).
+    Every 5% log line now carries a timing breakdown.
+  - First-person sword had no dip after an attack: the replay reset only the attack cooldown, never
+    `ticksSinceHandEquipping`. Attack-counter resets are now recorded as a `UI_STATE` event and
+    replayed with `resetTicksSince` (`d396467`); old recordings fall back to it on cooldown drops.
 - **First in-game run (2026-10-10, user):** `runClient` launches with every mixin; on the new
   build playback, seek and pause work. Observed broken and fixed since: ffmpeg "not found" after
   `winget install ffmpeg` (a process started before the install keeps the old PATH; discovery now
