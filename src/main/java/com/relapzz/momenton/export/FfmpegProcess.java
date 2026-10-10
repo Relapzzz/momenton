@@ -351,7 +351,7 @@ public final class FfmpegProcess implements AutoCloseable {
 
 	private void copy(ByteBuffer source, byte[] frame, int from, int to) {
 		int base = source.position();
-		if (format == FrameFormat.NV12) {
+		if (!format.bottomUp()) {
 			source.get(base + from * stride, frame, from * stride, (to - from) * stride);
 			return;
 		}

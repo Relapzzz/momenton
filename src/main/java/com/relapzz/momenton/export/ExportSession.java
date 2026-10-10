@@ -148,8 +148,10 @@ public final class ExportSession {
 		active.settle();
 		Window window = client.getWindow();
 		window.setVsync(false);
-		window.setFramebufferWidth(settings.width());
-		window.setFramebufferHeight(settings.height());
+		if (!VulkanMod.LOADED) {
+			window.setFramebufferWidth(settings.width());
+			window.setFramebufferHeight(settings.height());
+		}
 		client.onResolutionChanged();
 		Momenton.LOGGER.info("Exporting {} frames of {} in {} clips at {}x{} {} fps as {} to {}", frames, settings.replay().getFileName(),
 				settings.clips().size(), settings.width(), settings.height(), settings.fps(), format, settings.output());
@@ -309,7 +311,9 @@ public final class ExportSession {
 	}
 
 	private void grabbed() {
-		overlay.capture(client.getFramebuffer().getColorAttachment());
+		if (!VulkanMod.LOADED) {
+			overlay.capture(client.getFramebuffer().getColorAttachment());
+		}
 		long start = System.nanoTime();
 		try {
 			audio.render();
@@ -346,6 +350,9 @@ public final class ExportSession {
 	}
 
 	private boolean terrainBuilt() {
+		if (VulkanMod.LOADED) {
+			return ((ClientWorldAccessor) client.world).getChunkUpdaters().isEmpty() && VulkanMod.terrainBuilt();
+		}
 		WorldRenderer renderer = client.worldRenderer;
 		ChunkRenderingDataPreparerAccessor graph = (ChunkRenderingDataPreparerAccessor) renderer.getChunkRenderingDataPreparer();
 		Future<?> update = graph.getTerrainUpdateFuture();

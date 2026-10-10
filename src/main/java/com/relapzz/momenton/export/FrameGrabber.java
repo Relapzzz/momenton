@@ -13,6 +13,7 @@ import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.textures.TextureFormat;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.relapzz.momenton.Momenton;
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.Framebuffer;
 import net.minecraft.client.render.VertexFormats;
 
@@ -39,6 +40,9 @@ final class FrameGrabber implements AutoCloseable {
 	private final ArrayDeque<GpuBuffer> free = new ArrayDeque<>();
 	private final List<Copy> copying = new ArrayList<>();
 	private final ExportTimings timings;
+	private final int width;
+	private final int height;
+	private final int bytes;
 	private final GpuTexture nv12;
 	private final GpuTextureView nv12View;
 	private int pending;
@@ -46,6 +50,9 @@ final class FrameGrabber implements AutoCloseable {
 
 	FrameGrabber(int width, int height, FrameFormat format, ExportTimings timings) {
 		this.timings = timings;
+		this.width = width;
+		this.height = height;
+		this.bytes = format.bytes(width, height);
 		GpuDevice device = RenderSystem.getDevice();
 		if (format == FrameFormat.NV12) {
 			nv12 = device.createTexture(() -> "Momenton NV12 frame", GpuTexture.USAGE_RENDER_ATTACHMENT | GpuTexture.USAGE_COPY_SRC,
@@ -55,12 +62,16 @@ final class FrameGrabber implements AutoCloseable {
 			nv12 = null;
 			nv12View = null;
 		}
+		int size = VulkanMod.LOADED ? FrameFormat.RGBA.bytes(width + 1, height + 1) : bytes;
 		for (int i = 0; i < BUFFERS; i++) {
-			free.add(device.createBuffer(() -> "Momenton frame grab", GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_HINT_CLIENT_STORAGE | GpuBuffer.USAGE_COPY_DST, format.bytes(width, height)));
+			free.add(device.createBuffer(() -> "Momenton frame grab", GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_HINT_CLIENT_STORAGE | GpuBuffer.USAGE_COPY_DST, size));
 		}
 	}
 
 	static FrameFormat format(String args, int width, int height) {
+		if (VulkanMod.LOADED) {
+			return VulkanMod.bgra(MinecraftClient.getInstance().getFramebuffer().getColorAttachment()) ? FrameFormat.BGRA_TOP_DOWN : FrameFormat.RGBA_TOP_DOWN;
+		}
 		if (!args.contains(FrameFormat.PLACEHOLDER) || width % 4 != 0 || height % 2 != 0) {
 			return FrameFormat.RGBA;
 		}
@@ -77,13 +88,16 @@ final class FrameGrabber implements AutoCloseable {
 
 	boolean grab(Framebuffer framebuffer, Function<ByteBuffer, CompletableFuture<?>> sink) {
 		reclaim();
+		GpuTexture source = framebuffer.getColorAttachment();
+		if ((source.getWidth(0) & ~1) != width || (source.getHeight(0) & ~1) != height) {
+			return false;
+		}
 		GpuBuffer buffer = free.poll();
 		if (buffer == null) {
 			return false;
 		}
 		pending++;
 		CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
-		GpuTexture source = framebuffer.getColorAttachment();
 		if (nv12 != null) {
 			long start = System.nanoTime();
 			try (RenderPass pass = encoder.createRenderPass(() -> "Momenton NV12 conversion", nv12View, OptionalInt.empty())) {
@@ -92,9 +106,13 @@ final class FrameGrabber implements AutoCloseable {
 				pass.draw(0, 3);
 			}
 			timings.convert(System.nanoTime() - start);
-			source = nv12;
+			encoder.copyTextureToBuffer(nv12, buffer, 0, () -> deliver(buffer, sink), 0);
+			return true;
 		}
-		encoder.copyTextureToBuffer(source, buffer, 0, () -> deliver(buffer, sink), 0);
+		if (VulkanMod.LOADED) {
+			VulkanMod.flush();
+		}
+		encoder.copyTextureToBuffer(source, buffer, 0, () -> deliver(buffer, sink), 0, 0, 0, width, height);
 		return true;
 	}
 
@@ -125,7 +143,7 @@ final class FrameGrabber implements AutoCloseable {
 		long start = System.nanoTime();
 		GpuBuffer.MappedView view = RenderSystem.getDevice().createCommandEncoder().mapBuffer(buffer, true, false);
 		timings.map(System.nanoTime() - start);
-		copying.add(new Copy(buffer, view, sink.apply(view.data())));
+		copying.add(new Copy(buffer, view, sink.apply(view.data().slice(0, bytes))));
 	}
 
 	private void reclaim() {
