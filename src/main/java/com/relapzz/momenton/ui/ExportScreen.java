@@ -3,14 +3,17 @@ package com.relapzz.momenton.ui;
 import com.relapzz.momenton.edit.Clip;
 import com.relapzz.momenton.export.EncoderProbe;
 import com.relapzz.momenton.export.EncodingPreset;
+import com.relapzz.momenton.export.ExportFinisher;
 import com.relapzz.momenton.export.ExportSession;
 import com.relapzz.momenton.export.ExportSettings;
 import com.relapzz.momenton.export.FfmpegProcess;
+import com.relapzz.momenton.format.ReplayReader;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.CyclingButtonWidget;
+import net.minecraft.client.gui.widget.SliderWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.text.Text;
 
@@ -31,6 +34,8 @@ public class ExportScreen extends Screen {
 	private static String lastBitrate = "10M";
 	private static String lastCommand;
 	private static String lastArgs;
+	private static float lastGameVolume = 1.0f;
+	private static float lastMicVolume = 1.0f;
 	static ExportScreen last;
 
 	private final Screen parent;
@@ -38,6 +43,7 @@ public class ExportScreen extends Screen {
 	private final int durationTicks;
 	private final List<Clip> clips;
 	private final String commandDefault;
+	private final boolean hasMic;
 	private final List<Text> labels = new ArrayList<>();
 	private final List<EncodingPreset> presets = EncodingPreset.available(EncoderProbe.working());
 	private EncodingPreset preset = lastPreset != null && presets.contains(lastPreset) ? lastPreset : presets.getFirst();
@@ -52,6 +58,9 @@ public class ExportScreen extends Screen {
 	private TextFieldWidget commandField;
 	private TextFieldWidget argsField;
 	private CyclingButtonWidget<Boolean> cursor;
+	private VolumeSlider gameVolume;
+	private VolumeSlider micVolume;
+	private CyclingButtonWidget<Boolean> mix;
 	private Text message = Text.empty();
 
 	public ExportScreen(Screen parent, Path replay, int durationTicks) {
@@ -65,6 +74,15 @@ public class ExportScreen extends Screen {
 		this.durationTicks = durationTicks;
 		this.clips = clips;
 		this.commandDefault = lastCommand != null ? lastCommand : FfmpegProcess.defaultCommand();
+		this.hasMic = hasMic(replay);
+	}
+
+	private static boolean hasMic(Path replay) {
+		try (ReplayReader reader = new ReplayReader(replay)) {
+			return reader.metadata().micStartTick() != null;
+		} catch (IOException e) {
+			return false;
+		}
 	}
 
 	@Override
@@ -96,8 +114,20 @@ public class ExportScreen extends Screen {
 		label("screen.momenton.export.ffmpeg");
 		argsField = field(argsField, left, 200, "screen.momenton.export.arguments", lastArgs != null ? lastArgs : preset.arguments());
 		label("screen.momenton.export.arguments");
+		gameVolume = addDrawableChild(new VolumeSlider(left, row(labels.size()), hasMic ? 95 : 200, "screen.momenton.export.volume.game",
+				gameVolume == null ? lastGameVolume : gameVolume.volume()));
+		if (hasMic) {
+			micVolume = addDrawableChild(new VolumeSlider(left + 105, row(labels.size()), 95, "screen.momenton.export.volume.voice",
+					micVolume == null ? lastMicVolume : micVolume.volume()));
+		}
+		label("screen.momenton.export.volume");
 		cursor = addDrawableChild(CyclingButtonWidget.onOffBuilder(cursor == null || cursor.getValue())
-				.build(width / 2 - 155, row(labels.size()), 310, 20, Text.translatable("screen.momenton.export.cursor")));
+				.build(width / 2 - 155, row(labels.size()), hasMic ? 152 : 310, 20, Text.translatable("screen.momenton.export.cursor")));
+		if (hasMic) {
+			mix = addDrawableChild(CyclingButtonWidget.onOffBuilder(Text.translatable("screen.momenton.export.voice.mixed"),
+							Text.translatable("screen.momenton.export.voice.separate"), mix == null ? ExportFinisher.mixCommentary : mix.getValue())
+					.build(width / 2 + 3, row(labels.size()), 152, 20, Text.translatable("screen.momenton.export.voice")));
+		}
 
 		addDrawableChild(ButtonWidget.builder(Text.translatable("screen.momenton.export"), button -> export())
 				.dimensions(width / 2 - 155, height - 28, 150, 20)
@@ -223,10 +253,16 @@ public class ExportScreen extends Screen {
 		}
 		lastCommand = commandField.getText().trim();
 		lastArgs = args;
+		lastGameVolume = gameVolume.volume();
+		if (hasMic) {
+			lastMicVolume = micVolume.volume();
+			ExportFinisher.mixCommentary = mix.getValue();
+		}
 		last = this;
 		message = Text.empty();
 		client.setScreen(null);
-		ExportSession.start(client, new ExportSettings(replay, exported, w, h, fps, output, command, args, bitrate, cursor.getValue(), 1.0f, 1.0f));
+		ExportSession.start(client, new ExportSettings(replay, exported, w, h, fps, output, command, args, bitrate, cursor.getValue(),
+				lastGameVolume, hasMic ? lastMicVolume : 0.0f));
 	}
 
 	private void fail(String key) {
@@ -291,6 +327,30 @@ public class ExportScreen extends Screen {
 			return Path.of(text).toAbsolutePath();
 		} catch (InvalidPathException e) {
 			return null;
+		}
+	}
+
+	private static final class VolumeSlider extends SliderWidget {
+		private final String key;
+
+		private VolumeSlider(int x, int y, int width, String key, float volume) {
+			super(x, y, width, 20, Text.empty(), volume / 2.0);
+			this.key = key;
+			updateMessage();
+		}
+
+		private float volume() {
+			return Math.round(value * 40) / 20.0f;
+		}
+
+		@Override
+		protected void updateMessage() {
+			int percent = Math.round(volume() * 100);
+			setMessage(Text.translatable(key, percent == 0 ? Text.translatable("screen.momenton.export.volume.muted") : Text.literal(percent + "%")));
+		}
+
+		@Override
+		protected void applyValue() {
 		}
 	}
 }

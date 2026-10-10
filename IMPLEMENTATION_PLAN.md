@@ -549,9 +549,18 @@ from the 1.21.11 bytecode of `SoundEngine` and `SoundSystem`, not taken from Rep
   total never drifts by more than one sample, and appends them to `momenton-audio-<name>.pcm`.
 - At a cut, `stopOneShots()` stops every non-repeating sound still playing, so nothing from before
   the cut is heard after it.
-- `FfmpegProcess.mux`, on the finishing thread, then runs `ffmpeg -nostdin -y -i video -f s16le -ar 48000 -ac 2 -i pcm -c:v copy
-  -c:a aac|libopus -b:a 192k -shortest output` (Opus for `.webm`) and appends its output to
-  `export.log`. The temporary `momenton-video-*` and PCM files are deleted however the export ends.
+- `FfmpegProcess.mux`, on the finishing thread, then runs `ffmpeg -nostdin -y -i video -f s16le -ar 48000 -ac 2 -i pcm
+  [-f s16le -ar <micRate> -ac 1 -i mic.pcm] -filter_complex "[1:a]volume=G[a0];[2:a]volume=M[a1]" -map 0:v -map [a0] -map [a1]
+  -c:v copy -c:a aac|libopus -b:a 192k -metadata:s:a:N title=... handler_name=... -disposition:a:0 default
+  -disposition:a:1 0 -shortest output` (Opus for `.webm`) and appends its output to `export.log`. Game is
+  the first, default track titled "Game"; commentary the second, titled "Commentary" (`title` names
+  the track in Matroska, `handler_name` in MP4). A volume of 0 drops that input and its track; with
+  both at 0 only the video is copied. The temporary `momenton-video-*`, game PCM and
+  `momenton-mic-*.pcm` files are deleted however the export ends.
+- **Mix mode** (some players only play the first track) replaces the two outputs with
+  `[a1]pan=stereo|c0=c0|c1=c0[voice];[a0][voice]amix=inputs=2:duration=first:normalize=0[mix]`, one
+  track titled "Game and commentary". The voice lands at unity in both channels and `normalize=0`
+  keeps amix from halving the inputs, so the slider values are the levels heard.
 
 **Mic commentary** is recorded live, because a voice cannot be re-simulated.
 
@@ -574,8 +583,19 @@ from the 1.21.11 bytecode of `SoundEngine` and `SoundSystem`, not taken from Rep
   the entry into a `SourceDataLine`, writing silence before the track starts and after it ends. It
   re-seeks when the tick jumps (anything but the same tick or the next) or when playback drifts more
   than 3 ticks from the expected position, and stops the line while paused.
-- The mic is not in exports yet (Wave 6): it joins the mux as a second audio track with its own gain
-  and mute, starting at `micStartTick` mapped through the clip list.
+- **Export** (`ExportFinisher`, after the video encode finishes, when the replay has a mic and its
+  volume is above 0): the WAV is cut straight out of the STORED zip entry into a raw mono
+  `momenton-mic-<name>.pcm` exactly as long as the game PCM, `round(frames * rate / fps)` samples.
+  Clip `i` of the export occupies output samples `[round(T_i * rate / 20), round(T_(i+1) * rate / 20))`,
+  where `T_i` is the tick length of the clips before it, so a sample on a cut belongs to the next clip,
+  as frames do; the last clip runs to the end of the last frame. Its samples come from the mic at
+  `round((clip.startTick - micStartTick) * rate / 20)` onward, the same rule as live playback, and
+  anything before the first or past the last recorded sample is silence.
+- `ExportScreen` shows a game volume slider, and for recordings with a mic a voice slider and an
+  own-track / mixed-in toggle (0-200 % in 5 % steps, 0 = muted), remembered for the game session.
+  The volumes travel in `ExportSettings`; the toggle is the static `ExportFinisher.mixCommentary`,
+  captured when the finisher starts, because the settings record is shared and fixed. It belongs in
+  `ExportSettings` the next time that record changes.
 
 Consequence to accept: the live preview has no mixed game audio - the engine makes its own sound
 during playback, and the mic WAV is played back in sync as a preview-only convenience.

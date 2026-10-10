@@ -190,7 +190,7 @@ class FfmpegProcessTest {
 		Path log = dir.resolve("mux.log");
 		List<Process> started = new ArrayList<>();
 		List<Double> seconds = new ArrayList<>();
-		FfmpegProcess.mux(ffmpeg, video, pcm, output, log, started::add, seconds::add);
+		FfmpegProcess.mux(ffmpeg, video, new FfmpegProcess.MuxAudio(pcm, 1.0f, null, 0, 0, false), output, log, started::add, seconds::add);
 		assertEquals(1, started.size());
 		assertFalse(seconds.isEmpty());
 		assertTrue(seconds.getLast() > 0.9, seconds.toString());
