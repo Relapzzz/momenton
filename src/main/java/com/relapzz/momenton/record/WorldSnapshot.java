@@ -1,7 +1,12 @@
 package com.relapzz.momenton.record;
 
 import com.mojang.datafixers.util.Pair;
+import com.relapzz.momenton.Momenton;
 import com.relapzz.momenton.mixin.client.PlayerListS2CPacketAccessor;
+import it.unimi.dsi.fastutil.longs.Long2LongMap;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.client.network.ClientPlayerEntity;
@@ -31,6 +36,7 @@ import net.minecraft.network.packet.s2c.play.InventoryS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlayerListS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
 import net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket;
+import net.minecraft.util.Util;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.light.LightingProvider;
@@ -57,8 +63,28 @@ import java.util.Set;
  * with the same codec, and applies them through the same vanilla handlers. There is nothing to write
  * on the playback side at all.
  */
-final class WorldSnapshot {
+public final class WorldSnapshot {
+	private static final long SETTLE_MS = 5000;
+	private static final Long2LongMap marks = new Long2LongOpenHashMap();
+	private static Long2ObjectMap<Cached> cache = new Long2ObjectOpenHashMap<>();
+
 	private WorldSnapshot() {
+	}
+
+	public static void markDirty(int chunkX, int chunkZ) {
+		if (Recorder.isRecording()) {
+			marks.put(ChunkPos.toLong(chunkX, chunkZ), Util.getMeasuringTimeMs());
+		} else {
+			cache.clear();
+		}
+	}
+
+	public static void markDirtyAround(int chunkX, int chunkZ) {
+		for (int x = chunkX - 1; x <= chunkX + 1; x++) {
+			for (int z = chunkZ - 1; z <= chunkZ + 1; z++) {
+				markDirty(x, z);
+			}
+		}
 	}
 
 	/** Every packet needed to rebuild the current world, in the order a fresh join would send them. */
@@ -152,10 +178,30 @@ final class WorldSnapshot {
 		}
 
 		loaded.sort(Comparator.comparingLong(chunk -> playerChunk.getSquaredDistance(chunk.getPos())));
+		long now = Util.getMeasuringTimeMs();
+		List<WorldChunk> stale = loaded.stream().filter(chunk -> {
+			long pos = chunk.getPos().toLong();
+			Cached cached = cache.get(pos);
+			return cached == null || cached.chunk() != chunk
+					|| marks.containsKey(pos) && cached.builtAt() - marks.get(pos) < SETTLE_MS;
+		}).toList();
 		LightingProvider light = world.getChunkManager().getLightingProvider();
-		packets.addAll(loaded.parallelStream()
-				.map(chunk -> (Packet<?>) new ChunkDataS2CPacket(chunk, light, null, null))
-				.toList());
+		List<ChunkDataS2CPacket> built = stale.parallelStream()
+				.map(chunk -> new ChunkDataS2CPacket(chunk, light, null, null))
+				.toList();
+		for (int i = 0; i < stale.size(); i++) {
+			cache.put(stale.get(i).getPos().toLong(), new Cached(stale.get(i), built.get(i), now));
+		}
+
+		Long2ObjectMap<Cached> kept = new Long2ObjectOpenHashMap<>(loaded.size());
+		for (WorldChunk chunk : loaded) {
+			Cached cached = cache.get(chunk.getPos().toLong());
+			kept.put(chunk.getPos().toLong(), cached);
+			packets.add(cached.packet());
+		}
+		cache = kept;
+		marks.long2LongEntrySet().removeIf(mark -> now - mark.getLongValue() >= SETTLE_MS);
+		Momenton.LOGGER.info("Snapshot rebuilt {} of {} chunks", stale.size(), loaded.size());
 	}
 
 	/**
@@ -220,5 +266,8 @@ final class WorldSnapshot {
 				packets.add(new EntityAttachS2CPacket(entity, leashable.getLeashHolder()));
 			}
 		}
+	}
+
+	private record Cached(WorldChunk chunk, ChunkDataS2CPacket packet, long builtAt) {
 	}
 }

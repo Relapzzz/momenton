@@ -10,6 +10,7 @@ import net.minecraft.network.packet.s2c.config.DynamicRegistriesS2CPacket;
 import net.minecraft.network.packet.s2c.config.FeaturesS2CPacket;
 import net.minecraft.network.packet.s2c.config.ReadyS2CPacket;
 import net.minecraft.network.packet.s2c.config.SelectKnownPacksS2CPacket;
+import net.minecraft.network.packet.s2c.play.CommandTreeS2CPacket;
 import net.minecraft.network.packet.s2c.play.GameJoinS2CPacket;
 import net.minecraft.network.state.ConfigurationStates;
 import org.jetbrains.annotations.Nullable;
@@ -35,6 +36,7 @@ public final class SessionSetup {
 	private static final List<Packet<?>> configuration = new ArrayList<>();
 	private static boolean configuring;
 	private static GameJoinS2CPacket join;
+	private static CommandTreeS2CPacket commands;
 
 	private SessionSetup() {
 	}
@@ -51,6 +53,7 @@ public final class SessionSetup {
 			if (!configuring) {
 				configuration.clear();
 				join = null;
+				commands = null;
 				configuring = true;
 			}
 			configuration.add(packet);
@@ -63,6 +66,8 @@ public final class SessionSetup {
 			configuring = false;
 		} else if (packet instanceof GameJoinS2CPacket game) {
 			join = game;
+		} else if (packet instanceof CommandTreeS2CPacket tree) {
+			commands = tree;
 		}
 	}
 
@@ -70,6 +75,11 @@ public final class SessionSetup {
 	@Nullable
 	static synchronized GameJoinS2CPacket gameJoin() {
 		return join;
+	}
+
+	@Nullable
+	static synchronized CommandTreeS2CPacket commandTree() {
+		return commands;
 	}
 
 	/** The contents of {@code setup.bin}: each configuration packet as {@code [varint length][bytes]}. */
