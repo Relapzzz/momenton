@@ -81,6 +81,7 @@ public final class Recorder {
 	private final List<ReplayMetadata.DimensionChange> dimensionChanges = new ArrayList<>();
 
 	private final String worldName;
+	private final ReplayMetadata.PlayerEntry player;
 	private final String initialDimension;
 	private final int framebufferWidth;
 	private final int framebufferHeight;
@@ -108,6 +109,7 @@ public final class Recorder {
 		this.codec = PlayStateFactories.S2C.bind(RegistryByteBuf.makeFactory(handler.getRegistryManager())).codec();
 		this.localPlayer = new LocalPlayerWriter(handler.getRegistryManager());
 		this.worldName = worldName(client);
+		this.player = new ReplayMetadata.PlayerEntry(handler.getProfile().id().toString(), handler.getProfile().name());
 		this.initialDimension = client.world.getRegistryKey().getValue().toString();
 		Window window = client.getWindow();
 		this.framebufferWidth = window.getFramebufferWidth();
@@ -568,7 +570,7 @@ public final class Recorder {
 				micStartTick == null ? null : WavWriter.SAMPLE_RATE,
 				mods,
 				resourcePacks,
-				null);
+				player);
 	}
 
 	/** The save name in singleplayer, the server entry's name otherwise. Vanilla resolves it this way. */

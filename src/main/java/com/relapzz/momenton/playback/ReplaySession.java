@@ -255,7 +255,7 @@ public final class ReplaySession {
 		LocalPlayerDriver.reset();
 		UiStateDriver.reset();
 		if (connection == null) {
-			connection = new OfflineConnection(client);
+			connection = new OfflineConnection(client, metadata.player());
 			connection.applySetup(reader.setup());
 		}
 		connection.applySnapshot(reader.snapshot(index));
