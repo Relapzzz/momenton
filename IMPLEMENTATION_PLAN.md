@@ -749,8 +749,10 @@ applied is part of the design:**
   `LivingEntity.baseTick` captures `lastHeadYaw` *during* the tick.
 - **Sneak** goes back through `player.input`, because `ClientPlayerEntity.isSneaking()` is an override
   that reads nothing else.
-- **Animations** (hand swing, attack cooldown) are fed as *starts* - `swingHand`, and
-  `resetTicksSinceLastAttack` when the recorded cooldown drops - never as recorded counter values.
+- **Animations** (hand swing, attack cooldown, the held item's dip) are fed as *starts* - `swingHand`,
+  and the recorded reset event (`resetTicksSince` resets cooldown and dip, `resetTicksSinceLastAttack`
+  only the cooldown) - never as recorded counter values. Old recordings without the event fall back to
+  `resetTicksSince` on every recorded cooldown drop.
 
 **A hit is entirely the server's on 1.21.11.** `PlayerEntity.attack` gates its effects on
 `target.sidedDamage(...)`, which on a `ClientWorld` is `Entity.clientDamage` - overridden by eight
