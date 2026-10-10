@@ -47,7 +47,7 @@ class FfmpegProcessTest {
 		assumeTrue(ffmpeg.isPresent(), "ffmpeg not found");
 		Path output = dir.resolve("nested").resolve("clip.mp4");
 		ByteBuffer frame = ByteBuffer.allocate(16 * 16 * 4);
-		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg.get(), 16, 16, 30, output)) {
+		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg.get().toString(), FfmpegProcess.DEFAULT_ARGS, 16, 16, 30, 0, output)) {
 			process.writeFrame(frame);
 			frame.put(0, (byte) 255);
 			process.writeFrame(frame);
@@ -61,7 +61,7 @@ class FfmpegProcessTest {
 		Optional<Path> ffmpeg = FfmpegProcess.locate();
 		assumeTrue(ffmpeg.isPresent(), "ffmpeg not found");
 		IOException error = assertThrows(IOException.class, () -> {
-			try (FfmpegProcess process = FfmpegProcess.start(ffmpeg.get(), 16, 16, 30, dir.resolve("clip.unknownformat"))) {
+			try (FfmpegProcess process = FfmpegProcess.start(ffmpeg.get().toString(), FfmpegProcess.DEFAULT_ARGS, 16, 16, 30, 0, dir.resolve("clip.unknownformat"))) {
 				process.writeFrame(ByteBuffer.allocate(16 * 16 * 4));
 				process.finish();
 			}
@@ -73,7 +73,7 @@ class FfmpegProcessTest {
 	void rejectsWrongFrameSize(@TempDir Path dir) throws IOException {
 		Optional<Path> ffmpeg = FfmpegProcess.locate();
 		assumeTrue(ffmpeg.isPresent(), "ffmpeg not found");
-		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg.get(), 16, 16, 30, dir.resolve("clip.mp4"))) {
+		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg.get().toString(), FfmpegProcess.DEFAULT_ARGS, 16, 16, 30, 0, dir.resolve("clip.mp4"))) {
 			assertThrows(IllegalArgumentException.class, () -> process.writeFrame(ByteBuffer.allocate(10)));
 		}
 	}

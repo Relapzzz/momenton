@@ -85,8 +85,8 @@ public final class ExportSession {
 			return;
 		}
 
-		int end = Math.min(settings.endTick(), metadata.durationTicks() - 1);
-		int frames = (int) (((long) (end - settings.startTick()) * settings.fps() + 19) / 20);
+		int end = Math.min(settings.clips().getLast().endTick(), metadata.durationTicks() - 1);
+		int frames = (int) (((long) (end - settings.clips().getFirst().startTick()) * settings.fps() + 19) / 20);
 		if (frames <= 0) {
 			report(client, false, "Nothing to export between those ticks");
 			return;
@@ -96,7 +96,7 @@ public final class ExportSession {
 		Path video = output.resolveSibling("momenton-video-" + output.getFileName());
 		FfmpegProcess ffmpeg;
 		try {
-			ffmpeg = FfmpegProcess.start(settings.ffmpeg(), settings.width(), settings.height(), settings.fps(), video);
+			ffmpeg = FfmpegProcess.start(settings.ffmpegCommand(), settings.ffmpegArgs(), settings.width(), settings.height(), settings.fps(), settings.bitrate(), video);
 		} catch (IOException e) {
 			Momenton.LOGGER.error("Could not start FFmpeg", e);
 			report(client, false, "Could not start FFmpeg: " + e.getMessage());
@@ -125,7 +125,7 @@ public final class ExportSession {
 		if (!ReplaySession.isPaused()) {
 			ReplaySession.togglePause();
 		}
-		ReplaySession.seek(settings.startTick());
+		ReplaySession.seek(settings.clips().getFirst().startTick());
 
 		active = new ExportSession(client, settings, metadata, frames, ffmpeg, video, audio);
 		Window window = client.getWindow();
@@ -198,7 +198,7 @@ public final class ExportSession {
 
 	private int beginFrame() {
 		long ticks = (long) frame * 20;
-		target = settings.startTick() + (int) (ticks / settings.fps());
+		target = settings.clips().getFirst().startTick() + (int) (ticks / settings.fps());
 		counter = new FrameCounter((float) (ticks % settings.fps()) / settings.fps(), 20.0f / settings.fps());
 		return Math.max(0, target + 1 - ReplaySession.currentTick());
 	}
@@ -210,7 +210,7 @@ public final class ExportSession {
 		}
 		if (settling) {
 			if (!(client.currentScreen instanceof LevelLoadingScreen) && terrainBuilt()) {
-				ReplaySession.seek(settings.startTick());
+				ReplaySession.seek(settings.clips().getFirst().startTick());
 				ReplaySession.togglePause();
 				audio.stopOneShots();
 				settling = false;
@@ -273,7 +273,7 @@ public final class ExportSession {
 				throw failure;
 			}
 			ffmpeg.finish();
-			FfmpegProcess.mux(settings.ffmpeg(), video, audio.path(), settings.output());
+			FfmpegProcess.mux(settings.ffmpegCommand(), video, audio.path(), settings.output());
 		} catch (IOException e) {
 			fail(e);
 			return;

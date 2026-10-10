@@ -1,6 +1,7 @@
 package com.relapzz.momenton.ui;
 
 import com.relapzz.momenton.export.ExportSession;
+import com.relapzz.momenton.edit.Clip;
 import com.relapzz.momenton.export.ExportSettings;
 import com.relapzz.momenton.export.FfmpegProcess;
 import net.fabricmc.loader.api.FabricLoader;
@@ -15,6 +16,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.util.List;
 
 public class ExportScreen extends Screen {
 	private static final String[] LABELS = {
@@ -28,6 +30,7 @@ public class ExportScreen extends Screen {
 	private final Screen parent;
 	private final Path replay;
 	private final int durationTicks;
+	private final List<Clip> clips;
 	private final String ffmpegDefault;
 
 	private TextFieldWidget widthField;
@@ -41,10 +44,15 @@ public class ExportScreen extends Screen {
 	private Text message;
 
 	public ExportScreen(Screen parent, Path replay, int durationTicks) {
+		this(parent, replay, durationTicks, List.of(new Clip(0, durationTicks)));
+	}
+
+	public ExportScreen(Screen parent, Path replay, int durationTicks, List<Clip> clips) {
 		super(Text.translatable("screen.momenton.export.title"));
 		this.parent = parent;
 		this.replay = replay;
 		this.durationTicks = durationTicks;
+		this.clips = clips;
 		this.ffmpegDefault = FfmpegProcess.locate().map(Path::toString).orElse("");
 		this.message = ffmpegDefault.isEmpty() ? Text.translatable("screen.momenton.export.no_ffmpeg") : Text.empty();
 	}
@@ -146,7 +154,8 @@ public class ExportScreen extends Screen {
 			return;
 		}
 		client.setScreen(null);
-		ExportSession.start(client, new ExportSettings(replay, startTick, endTick, w, h, fps, output, ffmpeg, cursor.getValue()));
+		ExportSession.start(client, new ExportSettings(replay, clips.size() > 1 ? clips : List.of(new Clip(startTick, endTick)), w, h, fps, output,
+				ffmpeg.toString(), FfmpegProcess.DEFAULT_ARGS, 0, cursor.getValue()));
 	}
 
 	private void fail(String key) {

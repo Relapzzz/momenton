@@ -53,7 +53,13 @@ public final class FfmpegProcess implements AutoCloseable {
 			.findFirst();
 	}
 
-	public static FfmpegProcess start(Path ffmpeg, int width, int height, int fps, Path output) throws IOException {
+	public static final String DEFAULT_ARGS = "-y -f rawvideo -pix_fmt rgba -s %WIDTH%x%HEIGHT% -r %FPS% -i - -an -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \"%FILENAME%\"";
+
+	public static FfmpegProcess start(String command, String args, int width, int height, int fps, int bitrate, Path output) throws IOException {
+		return start(Path.of(command), width, height, fps, output);
+	}
+
+	private static FfmpegProcess start(Path ffmpeg, int width, int height, int fps, Path output) throws IOException {
 		Files.createDirectories(output.toAbsolutePath().getParent());
 		Process process = new ProcessBuilder(command(ffmpeg, width, height, fps, output))
 			.redirectOutput(ProcessBuilder.Redirect.DISCARD)
@@ -67,7 +73,8 @@ public final class FfmpegProcess implements AutoCloseable {
 			"-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", output.toString());
 	}
 
-	public static void mux(Path ffmpeg, Path video, Path pcm, Path output) throws IOException {
+	public static void mux(String command, Path video, Path pcm, Path output) throws IOException {
+		Path ffmpeg = Path.of(command);
 		Process process = new ProcessBuilder(ffmpeg.toString(), "-nostdin", "-y", "-i", video.toString(),
 			"-f", "s16le", "-ar", Integer.toString(LoopbackRenderer.SAMPLE_RATE), "-ac", "2", "-i", pcm.toString(),
 			"-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", output.toString())
