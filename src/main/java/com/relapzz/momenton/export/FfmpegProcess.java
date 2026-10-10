@@ -10,6 +10,7 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -66,11 +67,28 @@ public final class FfmpegProcess implements AutoCloseable {
 			return property;
 		}
 		Optional<Path> found = switch (Util.getOperatingSystem()) {
-			case WINDOWS -> findInGameDir(FabricLoader.getInstance().getGameDir());
+			case WINDOWS -> findInGameDir(FabricLoader.getInstance().getGameDir()).or(FfmpegProcess::findWinget);
 			case OSX -> findOnMac();
 			default -> Optional.empty();
 		};
 		return found.map(Path::toString).orElse("ffmpeg");
+	}
+
+	private static Optional<Path> findWinget() {
+		String local = System.getenv("LOCALAPPDATA");
+		if (local == null) {
+			return Optional.empty();
+		}
+		Path packages = Path.of(local, "Microsoft", "WinGet", "Packages");
+		if (!Files.isDirectory(packages)) {
+			return Optional.empty();
+		}
+		try (Stream<Path> found = Files.find(packages, 4,
+				(path, attrs) -> attrs.isRegularFile() && path.getFileName().toString().equalsIgnoreCase("ffmpeg.exe"))) {
+			return found.findFirst();
+		} catch (IOException | UncheckedIOException e) {
+			return Optional.empty();
+		}
 	}
 
 	private static Optional<Path> findInGameDir(Path gameDir) {
