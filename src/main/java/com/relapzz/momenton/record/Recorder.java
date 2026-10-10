@@ -447,6 +447,8 @@ public final class Recorder {
 			ui.reset();
 		}
 
+		LocalPrediction.hiddenEntities(client.world, at);
+
 		try {
 			byte[] moves = entities.capture(client.world);
 			if (moves != null) {
