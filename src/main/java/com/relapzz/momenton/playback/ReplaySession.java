@@ -146,6 +146,7 @@ public final class ReplaySession {
 		}
 
 		try {
+			ReplayResourcePacks.load(client, reader);
 			active = new ReplaySession(client, file, reader);
 		} catch (IOException e) {
 			Momenton.LOGGER.error("Could not start playback of {}", file, e);

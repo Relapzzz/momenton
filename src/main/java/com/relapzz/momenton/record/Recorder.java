@@ -1,5 +1,7 @@
 package com.relapzz.momenton.record;
 
+import com.google.common.hash.Hashing;
+import com.google.common.io.MoreFiles;
 import com.relapzz.momenton.Momenton;
 import com.relapzz.momenton.audio.MicRecorder;
 import com.relapzz.momenton.audio.WavWriter;
@@ -9,6 +11,9 @@ import com.relapzz.momenton.format.ReplayDependencies;
 import com.relapzz.momenton.format.ReplayMetadata;
 import com.relapzz.momenton.format.ReplayWriter;
 import com.relapzz.momenton.mixin.client.GameRendererInvoker;
+import com.relapzz.momenton.mixin.client.ServerPackEntryAccessor;
+import com.relapzz.momenton.mixin.client.ServerPackLoaderAccessor;
+import com.relapzz.momenton.mixin.client.ServerPackManagerAccessor;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import net.fabricmc.loader.api.FabricLoader;
@@ -44,7 +49,9 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -88,6 +95,8 @@ public final class Recorder {
 	private final int guiScale;
 	private final List<ReplayMetadata.ModEntry> mods = ReplayDependencies.loadedMods();
 	private final List<String> resourcePacks;
+	private final Map<String, Path> serverPackFiles;
+	private final List<ReplayMetadata.ServerPack> serverPacks = new ArrayList<>();
 	private final Path staging;
 	private final Path output;
 	private final long startedAtEpochMs = System.currentTimeMillis();
@@ -116,6 +125,7 @@ public final class Recorder {
 		this.framebufferHeight = window.getFramebufferHeight();
 		this.guiScale = window.getScaleFactor();
 		this.resourcePacks = ReplayDependencies.enabledResourcePacks(client);
+		this.serverPackFiles = activeServerPacks(client);
 		this.writer = new ReplayWriter(staging, 0);
 		this.io = Executors.newSingleThreadExecutor(runnable -> new Thread(runnable, "Momenton-Writer"));
 		this.frames = new FrameTrackWriter(io, writer);
@@ -240,6 +250,31 @@ public final class Recorder {
 				Momenton.LOGGER.error("Recording failed writing the session setup", e);
 			}
 		});
+		io.execute(() -> {
+			try {
+				for (Map.Entry<String, Path> file : serverPackFiles.entrySet()) {
+					ReplayMetadata.ServerPack pack = new ReplayMetadata.ServerPack(file.getKey(),
+							MoreFiles.asByteSource(file.getValue()).hash(Hashing.sha256()).toString());
+					writer.copyPart(pack.entry(), file.getValue());
+					serverPacks.add(pack);
+				}
+			} catch (IOException e) {
+				failed = true;
+				Momenton.LOGGER.error("Recording failed copying the server resource packs", e);
+			}
+		});
+	}
+
+	private static Map<String, Path> activeServerPacks(MinecraftClient client) {
+		Map<String, Path> packs = new LinkedHashMap<>();
+		ServerPackLoaderAccessor loader = (ServerPackLoaderAccessor) client.getServerResourcePackProvider();
+		for (Object pack : ((ServerPackManagerAccessor) loader.momenton$getManager()).momenton$getPacks()) {
+			ServerPackEntryAccessor entry = (ServerPackEntryAccessor) pack;
+			if (entry.momenton$getPath() != null && entry.momenton$isAccepted() && !entry.momenton$isDiscarded()) {
+				packs.put(entry.momenton$getId().toString(), entry.momenton$getPath());
+			}
+		}
+		return packs;
 	}
 
 	/**
@@ -570,7 +605,8 @@ public final class Recorder {
 				micStartTick == null ? null : WavWriter.SAMPLE_RATE,
 				mods,
 				resourcePacks,
-				player);
+				player,
+				List.copyOf(serverPacks));
 	}
 
 	/** The save name in singleplayer, the server entry's name otherwise. Vanilla resolves it this way. */
