@@ -135,6 +135,11 @@ recording.momenton (zip)
   ui_0000.bin        tick-rate UI state actions
   audio/mic.wav      48 kHz mono s16 WAV, STORED, added after the zip is finished
   thumb.png          preview still for the replay browser
+  resourcepacks/<uuid>.zip  each server or world pack active at F9, STORED; metadata serverPacks lists
+                     id and sha256; playback extracts to momenton/cache/packs/<sha256>.zip and
+                     loads them with ServerResourcePackLoader.initWorldPack + addResourcePack (no
+                     prompt, no download); leaving the replay clears them like leaving a server.
+                     Resource pack push/pop packets are dropped from the stream.
 ```
 
 **`frames.bin` record layout** (fixed stride, little-endian):
@@ -221,8 +226,15 @@ tick.
 **Snapshot threading.** Chunk packets, light data included, are built in a parallel stream on the
 common `ForkJoinPool`, nearest first. That is safe because the client thread blocks while it runs: the
 world cannot change while the thread that owns it waits, so parallel readers need no synchronisation
-and the snapshot stays consistent. The cost is a hitch on the client thread at every boundary (every
-500 ticks), which has to be measured.
+and the snapshot stays consistent. The cost was a hitch on the client thread at every boundary (8-29
+ms measured in the user's log), so built chunk packets are cached per chunk and reused (Wave 9): a
+chunk is rebuilt only if it is new, a different `WorldChunk` instance, or was marked within 5 s
+before its cached packet was built. Marks: `WorldChunk.setBlockState` on a client world, chunk load
+and unload (chunk and its 8 neighbours, since light crosses one chunk), light update packets, biome
+data and block entity updates. Light is computed after the change (vanilla `chunkUpdaters` drains
+over many frames), so the 5 s settle window rebuilds a chunk again at the next snapshot when its
+light may not have landed. This is engine-independent on purpose: ScalableLux (Starlight) overwrites
+the vanilla light provider, so hooks on vanilla `LightStorage` never fire there.
 
 **The snapshot-boundary race.** `MinecraftClient.render` calls `PacketApplyBatcher.apply()` before
 `tick()`. Netty stamps a packet with `Recorder.tick`, which only moves to `at+1` at the end of tick
@@ -305,6 +317,14 @@ other packet. The cases:
   each has its own hook. Anything run while a packet is being applied is excluded, or every real sound
   would be recorded twice: a counter wraps `PacketApplyBatcher$Entry.apply` for client play
   listeners, because any handler can reach these paths, not only the three obvious ones.
+- **Block changes:** a `ClientWorld.setBlockState` (4-argument override) that changes a block outside
+  packet application is synthesised as `BlockUpdateS2CPacket`, so placing and breaking appear on the
+  tick they did live rather than a ping later; `handleBlockUpdate` calls `World.setBlockState`
+  directly and rollbacks run inside packet application, so neither is captured. Also covers client-only
+  blocks such as herosanchoroptimizer's fake anchor.
+- **Hidden entities:** once per recorded tick, an entity in the unfiltered entity lookup but missing
+  from `ClientWorld.getEntities()` (marlows-crystal-optimizer hides a hit crystal that way) is
+  synthesised as destroyed; if it reappears, as a spawn plus tracked data.
 - **Screen contents:** `ClickSlotC2SPacket` carries the client's predicted result and the server only
   sends a correction when it disagrees, so item moves in a chest, crafting table or the player's
   inventory never appear clientbound. At the end of each tick, if `player.currentScreenHandler`'s
@@ -1210,6 +1230,11 @@ Rules discovered while building. Each one cost a failed run or a wrong fix; do n
   cooldowns missing in one pass this way.
 - Snapshot packets are built on the client thread and encoded on the writer thread: each must copy
   what it holds (checked: `TeamS2CPacket`, attributes, equipment stacks are copied).
+- Recorded is not applied: `frames.bin` carried FOV and the sprint flag from the start and nothing
+  read them until Wave 9 (sprint, speed, bow and ok_zoomer FOV were missing from every replay). When
+  adding a recorded field, add its reader in the same change.
+- Check the user's mod list before hooking vanilla internals: ScalableLux replaces the light engine,
+  so a vanilla `LightStorage` hook applied cleanly and never fired.
 - The replayed player must carry the recorded profile, not the viewer's: skins are looked up by UUID,
   and the dev username (so the UUID) changes on every launch.
 - `frames.bin` and `ENTITY_MOVE` cross-check offline: in first person a frame stamped tick T matches

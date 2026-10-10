@@ -57,10 +57,12 @@ Written but unobserved work goes in **Not yet verified**.
 ## Current state
 
 - Phases 0-2 complete and observed. Phases 3-7 written; much of it observed in five in-game runs on
-  2026-10-10 (see below). Waves 0-8 merged on `main`.
-- Last build (2026-10-10, after Wave 8): `./gradlew build --offline --rerun-tasks` green, 93 tests, 0
+  2026-10-10 (see below). Waves 0-9 merged on `main`.
+- Last build (2026-10-10, after Wave 9): `./gradlew build --offline --rerun-tasks` green, 93 tests, 0
   skipped, 0 failed; `checkReplay` ALL PASS (Inspect, Setup, Motion, Swing, Boundary) on
-  `2026-10-10_09-42-39`; 38 client mixins; no OpenGL imports. All agent worktrees removed.
+  `2026-10-10_09-42-39`; 47 client mixins; no OpenGL imports. All agent worktrees removed.
+- The user's eighth-run recordings `2026-10-10_18-28-04` and `_18-30-32` (profile below; copies in
+  `%TEMP%/mrec`) pass everything except the new command-tree check, which they predate.
 - The user tests in their own Modrinth profile (VulkanMod, HeroBot, PvP client mods):
   `C:/Users/<user>/AppData/Roaming/ModrinthApp/profiles/Asmeus Optimized/` (`logs/latest.log`,
   `momenton/recordings/`, `mods/momenton-1.0.0.jar`). Their first recording there,
@@ -75,6 +77,44 @@ Written but unobserved work goes in **Not yet verified**.
   back; mic track; the main test file) and `2026-10-10_09-02-53.momenton` (1596 ticks; Nether at
   1142 and back at 1482; its mic entry predates `4d582d2`, so the offline tools reject it - re-zip a
   copy to check it). Exports land in `run/momenton/exports/`.
+
+### Wave 9 (merged, unverified): mod compatibility, packs, prediction, FOV
+
+Eighth run (user's profile, two singleplayer recordings with rain, a HeroBot): skin layers, cape,
+armor bar, bot items, rain, crits and totem pops all observed correct. Reported: op commands red in
+replayed chat; asked for server packs, holograms, item names and compatibility with the profile's
+mods. Evidence and fixes:
+
+- Command tree (`COMMANDS`) absent from snapshots (decoded). `SessionSetup` keeps the last
+  `CommandTreeS2CPacket` per connection; snapshots carry it (`535eb95`). Setup checks it.
+- Server/world resource pack unloaded before every replay (user log 18:29:00, 18:31:55). Recording
+  stores active packs as `resourcepacks/<uuid>.zip` + metadata `serverPacks`; playback loads them
+  without prompt; pack push/pop packets dropped; export waits for the reload overlay (`a08a63c`,
+  `1c43286`). Browser no longer flags WORLD packs as different.
+- Snapshot hitch: chunk packet cache with dirty marks and a 5 s settle window (`535eb95`,
+  `e995679`); log line `Snapshot rebuilt N of M chunks`. First design hooked vanilla `LightStorage`;
+  replaced because the profile's ScalableLux overwrites the light provider.
+- Recorded FOV and sprint never applied (code: no reader). `FovMixin` (priority 1500, after
+  ok_zoomer) returns the frame's FOV for the world pass; sprint set at TAIL of the player tick
+  (`1c43286`). Overlay and titles cleared after a snapshot (no "Press Shift to dismount").
+- Client prediction: block changes synthesised as block updates (no ping lag; fake anchors);
+  entities hidden by marlows-crystal-optimizer synthesised as destroyed (`6323741`).
+- Holograms: the user's map has 32 `text_display`, 17 `item_display`, 4 `interaction` entities, all in
+  snapshots with their data; plugin holograms use the same entities. Item names: hotbar slot is
+  driven through vanilla `setSelectedSlot`, so the held-item name and tooltips take the vanilla path
+  (not yet observed).
+
+Mod audit of the profile (read-only, 58 jars) - remaining mismatches, not fixed:
+- BetterHitreg (enabled): plays hit sounds, hurt flash and crit particles at click time and cancels
+  the server's copies live; the recording holds both the synthesised and the server sound, so hits
+  may sound twice and hurt flashes land a ping late in replays. Needs a mod-specific rule.
+- ok_zoomer hides HUD and crosshair while zoomed; the FOV is now replayed but the HUD is not hidden.
+- CrosshairAddons, animatium item-use equip dip, shieldfixes shield sounds: driven by local input
+  that never runs in a replay.
+- VulkanMod export (never run): `VkCommandEncoder.copyTextureToBuffer` may read before the frame is
+  submitted (VulkanMod's own screenshot calls `Renderer.flushCmds()` first), the main target may not
+  resize, and the RGBA fallback may swap red and blue (BGRA swapchain). Needs one export to see.
+- AsyncParticles: `clearParticles()` from the export render path may race its async particle tick.
 
 ### Wave 8 (merged, unverified): snapshot parity with a real join
 
@@ -173,9 +213,14 @@ in `2026-10-10_09-42-39`): the tab list arrived before F9 and was never in a sna
   server channel no mod claims), recording HUD indicator over an open screen.
 - **Wave 7:** players, Carpet bots, own skin and cape in a new recording; tab list after a seek.
   Seventh run: players and bots visible with skins (layers missing, fixed in Wave 8).
-- **Wave 8:** skin layers on the recorded player; armor bar from the first frame; bot armor and held
-  items; below-name scores, sidebar, team colours, boss bars, tab header/footer, rain, border, pearl
-  and shield cooldowns from the first frame and after a backward seek; holograms riding players.
+- **Wave 8:** observed in the eighth run: skin layers and cape on the recorded player, armor bar,
+  bot armor and held items, rain. Still to see: below-name scores, sidebar, team colours, boss bars,
+  tab header/footer, border, pearl and shield cooldowns after a backward seek; holograms riding
+  players on a server.
+- **Wave 9:** commands not red; server pack in replay and export; `Snapshot rebuilt N of M` small after
+  the first; seek after building and lighting changes shows the right world; sprint/speed/bow/zoom FOV;
+  sprint particles; no dismount prompt; blocks appear with their particles on a server with ping;
+  crystals vanish on hit with the crystal optimizer; held-item names.
 - **VulkanMod:** launch and use reported fine; NV12 export upright with right colours unchecked.
 
 ## Known issues
@@ -205,14 +250,12 @@ in `2026-10-10_09-42-39`): the tab list arrived before F9 and was never in a sna
 - Old recordings: attack-speed changes at item switches restart the sword dip a few ticks late, and
   spear jabs dip (new recordings carry the reset events).
 - Render distance is a capture-time decision; view bobbing on the driven player is unchecked;
-  sprinting is recorded but not applied; the driven player is never `onGround`.
-- Server resource packs are not re-applied at playback: the pack loaded while recording (a world's
-  `resources.zip` or a server's pack) is unloaded when the world is left, so the replay renders without
-  it (user's log: `server/00000000/...` gone at 17:59:14). Next wave.
-- Snapshot hitch on the client thread (22 ms at F9, 9 ms per 25 s); chunk packets dominate. Next wave:
-  reuse unchanged chunks' encoded packets between snapshots, and measure the per-packet netty cost.
-- A replay starting or seeking while the recorded player rides shows "Press Shift to dismount"
-  (vanilla's `onEntityPassengersSet` overlay).
+  the driven player is never `onGround`.
+- Server packs pushed mid-recording are not captured (only those active at F9). A recording with a
+  client-only block (fake anchor) or any modded block fails to decode that chunk without the mod.
+- The first snapshot at F9 still costs a full build (22-29 ms); the per-packet re-encode on the netty
+  thread is unmeasured.
+- A title showing at a snapshot is not restored after a seek (titles are cleared, not re-sent).
 - A cooldown running at a snapshot restarts its sweep from full (the packet has no start tick); a boss
   bar mid-animation is captured up to 100 ms behind.
 - Tab entries added after a snapshot survive a backward seek past it (tab list only, harmless);
@@ -303,22 +346,25 @@ Complete, observed.
 
 ## Next session
 
-Copy `build/libs/momenton-1.0.0.jar` into the user's profile `mods/` (replacing the old one) and make
-NEW recordings; recordings from before Wave 8 keep the old gaps. Report pass or fail per step; on a
-failure, the recording name (the coordinator runs the tools on it from the profile's
-`momenton/recordings/`) and the profile's `logs/latest.log`.
+Copy `build/libs/momenton-1.0.0.jar` into the user's profile `mods/` and make NEW recordings (older
+ones lack the command tree, packs and prediction). The coordinator reads the profile's
+`logs/latest.log` and `momenton/recordings/` directly.
 
-1. Launch: no mixin error (38 client mixins).
-2. **Recorded player:** skin with layers (hat, jacket, sleeves) and cape in third person, front view and
-   the inventory model; armor bar and absorption hearts from the first frame; effect icons.
-3. **Bots and players:** HeroBot/Carpet bots and server players show armor, held items, offhand
-   (shield/totem), skin layers. Seek backward past a snapshot (25 s) and check again.
-4. **Server UI:** on a server with a sidebar, health or rank under nametags, coloured team names, a boss
-   bar and a tab header/footer: all present at the first frame and after a backward seek, nothing
-   doubled. Floating holograms and leaderboards present; ones riding players follow them.
-5. **PvP:** ender pearl and shield (axe-disabled) cooldown overlays on the hotbar; totem pop; crits;
-   others' shield blocking; hurt tilt; knockback. Compare a short OBS clip side by side.
-6. **World:** start a recording while it rains: the replay rains. World border visible near it.
-7. Remaining older steps (export, editor, commentary, presets) when convenient.
+1. Launch: no mixin error (47 client mixins).
+2. **Commands:** type an op command in chat while recording; in the replay it is not red.
+3. **Resource pack:** record on the practice map (it has a world pack) or a server with a pack; the
+   replay shows the pack's textures; the log shows `Snapshot rebuilt N of M chunks` with N small after
+   the first snapshot. Leave the replay: the pack unloads.
+4. **Seek:** place and break blocks, place a torch in a dark spot, wait 30 s, seek back and forward
+   across it: blocks and light right every time.
+5. **FOV and sprint:** sprint, drink speed, draw a bow, zoom with ok_zoomer; replay first person
+   matches; third person shows sprint particles.
+6. **Prediction:** on a server with ping: placed blocks appear with their sound; crystals vanish on
+   hit; anchor use shows the fake anchor.
+7. **Riding:** start or seek a replay while riding: no "Press Shift to dismount".
+8. **Server UI:** sidebar, below-name, team colours, boss bar, tab header, holograms after a seek.
+9. **Export under VulkanMod:** one short MP4 export; upright, right colours, not one frame behind,
+   no loading screen in the first frames. Send `momenton/export.log`.
+10. **BetterHitreg:** hit a mob or bot; in the replay, does each hit sound once or twice?
 
-Then the next wave: server resource packs at playback, snapshot hitch, mount overlay.
+Then: BetterHitreg rule, ok_zoomer HUD hiding, VulkanMod export issues from step 9.
