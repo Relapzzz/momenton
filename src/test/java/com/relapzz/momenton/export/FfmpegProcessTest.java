@@ -28,6 +28,8 @@ class FfmpegProcessTest {
 			"-s", "1920x1080", "-r", "60", "-i", "-", "-vf", "scale=out_color_matrix=bt709:out_range=tv");
 	private static final List<String> NV12_INPUT = List.of("-y", "-f", "rawvideo", "-pix_fmt", "nv12", "-colorspace", "bt709", "-color_primaries", "bt709",
 			"-color_trc", "bt709", "-color_range", "tv", "-s", "1920x1080", "-r", "60", "-i", "-");
+	private static final List<String> BGRA_INPUT = List.of("-y", "-f", "rawvideo", "-pix_fmt", "bgra", "-color_primaries", "bt709", "-color_trc", "bt709",
+			"-s", "1920x1080", "-r", "60", "-i", "-", "-vf", "scale=out_color_matrix=bt709:out_range=tv");
 
 	@Test
 	void splitsOnWhitespace() {
@@ -52,7 +54,8 @@ class FfmpegProcessTest {
 		for (FrameFormat format : FrameFormat.values()) {
 			for (EncodingPreset preset : EncodingPreset.values()) {
 				List<String> args = FfmpegProcess.split(FfmpegProcess.substitute(format.expand(preset.arguments()), 1920, 1080, 60, 8_000_000, "my clip." + preset.extension()));
-				List<String> input = format == FrameFormat.NV12 && preset != EncodingPreset.MKV_LOSSLESS ? NV12_INPUT : RGBA_INPUT;
+				List<String> input = format == FrameFormat.BGRA_TOP_DOWN ? BGRA_INPUT
+						: format == FrameFormat.NV12 && preset != EncodingPreset.MKV_LOSSLESS ? NV12_INPUT : RGBA_INPUT;
 				assertEquals(input, args.subList(0, input.size()), format + " " + preset);
 				assertEquals("-an", args.get(input.size()), format + " " + preset);
 				assertEquals("my clip." + preset.extension(), args.getLast(), format + " " + preset);
@@ -66,6 +69,8 @@ class FfmpegProcessTest {
 	void frameSizes() {
 		assertEquals(1920 * 1080 * 4, FrameFormat.RGBA.bytes(1920, 1080));
 		assertEquals(1920 * 1080 * 3 / 2, FrameFormat.NV12.bytes(1920, 1080));
+		assertEquals(1920 * 1080 * 4, FrameFormat.RGBA_TOP_DOWN.bytes(1920, 1080));
+		assertEquals(1920 * 1080 * 4, FrameFormat.BGRA_TOP_DOWN.bytes(1920, 1080));
 	}
 
 	@Test
@@ -115,6 +120,24 @@ class FfmpegProcessTest {
 		assertEquals(4, written[4]);
 		assertEquals(1, written[8]);
 		assertEquals(2, written[12]);
+	}
+
+	@Test
+	void bgraTopDownFrameReachesFfmpegUnflippedWithItsChannelOrder(@TempDir Path dir) throws IOException {
+		String ffmpeg = ffmpeg();
+		Path output = dir.resolve("frame.rgba");
+		ByteBuffer frame = ByteBuffer.allocateDirect(2 * 2 * 4);
+		for (int x = 0; x < 2; x++) {
+			frame.putInt(x * 4, 0xFF0000FF);
+			frame.putInt(8 + x * 4, 0x0000FFFF);
+		}
+		try (FfmpegProcess process = FfmpegProcess.start(ffmpeg, EncodingPreset.MKV_LOSSLESS.arguments().replace(EncodingPreset.MKV_LOSSLESS.codec(), "-f rawvideo -pix_fmt rgba"),
+				FrameFormat.BGRA_TOP_DOWN, 2, 2, 30, 0, output, dir.resolve("export.log"))) {
+			process.writeFrame(frame);
+			process.finish();
+			assertEquals(1, process.encodedFrames());
+		}
+		assertArrayEquals(new byte[] {0, 0, -1, -1, 0, 0, -1, -1, -1, 0, 0, -1, -1, 0, 0, -1}, Files.readAllBytes(output));
 	}
 
 	@Test

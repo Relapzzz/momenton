@@ -1,5 +1,6 @@
 package com.relapzz.momenton.ui;
 
+import com.mojang.blaze3d.textures.GpuTexture;
 import com.relapzz.momenton.edit.Clip;
 import com.relapzz.momenton.export.EncoderProbe;
 import com.relapzz.momenton.export.EncodingPreset;
@@ -7,6 +8,7 @@ import com.relapzz.momenton.export.ExportFinisher;
 import com.relapzz.momenton.export.ExportSession;
 import com.relapzz.momenton.export.ExportSettings;
 import com.relapzz.momenton.export.FfmpegProcess;
+import com.relapzz.momenton.export.VulkanMod;
 import com.relapzz.momenton.format.ReplayReader;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.gui.DrawContext;
@@ -91,7 +93,16 @@ public class ExportScreen extends Screen {
 		int left = width / 2 - 45;
 		widthField = field(widthField, left, 95, "screen.momenton.export.resolution", "1920");
 		heightField = field(heightField, left + 105, 95, "screen.momenton.export.resolution", "1080");
-		label("screen.momenton.export.resolution");
+		if (VulkanMod.LOADED) {
+			GpuTexture target = client.getFramebuffer().getColorAttachment();
+			widthField.setText(String.valueOf(target.getWidth(0) & ~1));
+			heightField.setText(String.valueOf(target.getHeight(0) & ~1));
+			widthField.setEditable(false);
+			heightField.setEditable(false);
+			labels.add(Text.translatableWithFallback("screen.momenton.export.resolution.window", "Window size (VulkanMod)"));
+		} else {
+			label("screen.momenton.export.resolution");
+		}
 		fpsField = field(fpsField, left, 200, "screen.momenton.export.fps", "60");
 		label("screen.momenton.export.fps");
 		if (clips.size() == 1) {
