@@ -42,7 +42,6 @@
   "screen.momenton.export.output": "Output file",
   "screen.momenton.export.ffmpeg": "ffmpeg path",
   "screen.momenton.export.cursor": "Draw cursor",
-  "screen.momenton.export.no_ffmpeg": "ffmpeg not found. Install ffmpeg or enter its path.",
   "screen.momenton.export.error.size": "Width and height must be positive even numbers.",
   "screen.momenton.export.error.fps": "Frame rate must be a whole number from 24 to 240.",
   "screen.momenton.export.error.range": "Start and end must be numbers of seconds.",
