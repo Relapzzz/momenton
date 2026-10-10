@@ -10,7 +10,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(ClientPlayerEntity.class)
 public class ClientPlayerEntityTailMixin {
 	@Inject(method = "tick", at = @At("TAIL"))
-	private void momenton$driveRecordedOverlays(CallbackInfo info) {
-		LocalPlayerDriver.driveOverlays((ClientPlayerEntity) (Object) this);
+	private void momenton$driveRecordedTailState(CallbackInfo info) {
+		ClientPlayerEntity player = (ClientPlayerEntity) (Object) this;
+		LocalPlayerDriver.driveSprint(player);
+		LocalPlayerDriver.driveOverlays(player);
 	}
 }

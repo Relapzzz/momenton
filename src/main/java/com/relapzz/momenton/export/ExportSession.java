@@ -282,7 +282,7 @@ public final class ExportSession {
 		if (settling) {
 			timings.pass(ExportTimings.Pass.SETTLE);
 			if (settledTicks >= PositionInterpolator.DEFAULT_INTERPOLATION_DURATION
-					&& !(client.currentScreen instanceof LevelLoadingScreen) && built()) {
+					&& !(client.currentScreen instanceof LevelLoadingScreen) && client.getOverlay() == null && built()) {
 				ReplaySession.seek(settleTick);
 				ReplaySession.togglePause();
 				audio.stopOneShots();
@@ -295,7 +295,7 @@ public final class ExportSession {
 				handOff();
 				return;
 			}
-		} else if (ReplaySession.currentTick() != target || !built()) {
+		} else if (ReplaySession.currentTick() != target || client.getOverlay() != null || !built()) {
 			timings.pass(ExportTimings.Pass.TERRAIN);
 		} else if (!grabber.grab(client.getFramebuffer(), this::write)) {
 			timings.pass(ExportTimings.Pass.STALL);

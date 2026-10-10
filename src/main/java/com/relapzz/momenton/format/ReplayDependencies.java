@@ -58,7 +58,7 @@ public record ReplayDependencies(List<String> missingMods, List<String> addedMod
 
 	public static List<String> enabledResourcePacks(MinecraftClient client) {
 		return client.getResourcePackManager().getEnabledProfiles().stream()
-				.filter(profile -> profile.getSource() != ResourcePackSource.SERVER)
+				.filter(profile -> profile.getSource() != ResourcePackSource.SERVER && profile.getSource() != ResourcePackSource.WORLD)
 				.map(ResourcePackProfile::getId)
 				.toList();
 	}

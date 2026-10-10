@@ -139,6 +139,13 @@ public final class LocalPlayerDriver {
 		}
 	}
 
+	public static void driveSprint(ClientPlayerEntity player) {
+		int flags = PovDriver.flags();
+		if (flags >= 0) {
+			player.setSprinting((flags & FrameTrack.FLAG_SPRINTING) != 0);
+		}
+	}
+
 	public static void driveOverlays(ClientPlayerEntity player) {
 		if (overlays == null) {
 			return;
@@ -253,6 +260,7 @@ public final class LocalPlayerDriver {
 			vehicle.updatePassengerPosition(player);
 		}
 		player.resetPosition();
+		driveSprint(player);
 		driveOverlays(player);
 		player.lastNauseaIntensity = player.nauseaIntensity;
 	}
