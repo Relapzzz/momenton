@@ -11,8 +11,8 @@ The living state file. Read it first, update it last. Design, reasoning and less
 4. Work the next unchecked box. Work is done by parallel subagents in waves, each in its own git
    worktree; see "Parallel development" in the plan for the waves and file ownership.
 
-A box is ticked only when the behaviour has been observed in game. Written but unobserved work goes
-in **Not yet verified**.
+A box is ticked only when the behaviour has been observed in game (or, for pure data, in JUnit).
+Written but unobserved work goes in **Not yet verified**.
 
 ## Before ending a session
 
@@ -26,40 +26,51 @@ in **Not yet verified**.
 ## Current state
 
 - Phases 0-2 (foundations, recording, playback with seeking) are complete and observed.
-- Git repository on `main`. Waves 0-3 are merged; nothing from Waves 1-3 has been observed in game.
-  - Wave 1: imgui removed, tools on Gradle, seek state merge, perspective restore, snapshot-boundary
-    race fix, snapshot timing log, finalise on write failure, `Recorder.synthesise`.
-  - Wave 2 (Phase 3 fidelity): local prediction as synthesised packets, screen contents/state/chat
-    draft and viewer-input blocking, normalised cursor (format version 2), portal warp, fire ticks,
-    vehicle pose.
-  - Wave 3: video export (`export/FfmpegProcess`, `FrameGrabber`, `ExportSession`, six export
-    mixins), `ui/ExportScreen` with an Export button in the browser, and the `edit/` data model.
-  - Wave 4 (merged 2026-10-09): game audio via OpenAL loopback in export (`audio/LoopbackRenderer`,
-    `mixin/client/audio/*`, `FfmpegProcess.mux`), the editor overlay (`ui/editor/EditorScreen`,
-    `EditSession`, Edit button in the browser, editor key O) and HUD toggles
-    (`edit/HudToggles`, `mixin/client/hud/InGameHudMixin`, saved in the project).
-  - Wave 4 also: seeks reuse the `ClientWorld` (`OfflineConnection.applySnapshot` drops the join after
-    the first load, clears the world in place, or sends a respawn when the snapshot is in another
-    dimension). Fixes a latent bug where seeking back from the Nether loaded Nether chunks into the
-    Overworld world (old rejoin reused the player). Seeks whose snapshot-to-target span crosses a
-    dimension still show the loading screen.
-- Wave 4 is fully merged (2026-10-09). Next is Wave 5, below.
-- 28 client mixins; the first launch is itself a check (`defaultRequire = 1`).
-- Decisions: the editor uses vanilla Screens and ImGui is dropped; export comes before the editor;
-  existing comments stay, new code adds none.
+- Waves 0-5 are merged on `main`. **Nothing from Waves 1-5 has been observed in game**; only JUnit.
+  - Waves 1-3: tools on Gradle and the Wave 1 playback/recorder fixes; Phase 3 fidelity (local
+    prediction, replayed screens, cursor format version 2, warp, fire, vehicles); video export and
+    the `edit/` data model.
+  - Wave 4: game audio in export through an OpenAL loopback device (`audio/LoopbackRenderer`,
+    `mixin/client/audio/*`), swapped in by `reloadSounds()`; `round(k*48000/fps)` cumulative samples
+    per grabbed frame; sound loads blocked on and device-change polling off while exporting; muxed
+    afterwards. Editor overlay (`ui/editor/EditorScreen`, `EditSession`, Edit button in the browser,
+    key O) with HUD toggles (`edit/HudToggles`, `InGameHudMixin`) saved in the project. Seeks reuse
+    the `ClientWorld`: the first load joins, later snapshots drop the join and clear the world in
+    place, or respawn when the snapshot is in another dimension. Seeks whose snapshot-to-target span
+    crosses a dimension still show the loading screen. Fixed a latent bug where seeking back from the
+    Nether loaded Nether chunks into the Overworld world.
+  - Wave 5, ffmpeg like ReplayMod: `EncodingPreset` (MP4 default/custom bitrate/potato, WebM custom
+    bitrate, MKV lossless), placeholder templates, quote-aware splitter, discovery order,
+    `<gameDir>/momenton/export.log`, startup failure detected by the missing `Output #0` line, 30 s
+    close; mux AAC for mp4/mkv, Opus for webm; `ExportScreen` with format, bitrate, editable command
+    and arguments; `ExportFailedScreen`, shown by `ExportSession` on any ffmpeg failure.
+  - Wave 5, edited export: the clip list exports as one video with a settle at each cut (seek to
+    target-1 plus one real tick, at least 3 client ticks, one-shot sounds stopped, particles
+    cleared). `currentTick()` means the tick on screen everywhere: a seek to T leaves T, each tick
+    adds one, playback ends at D-1. `ReplaySession.file()`; `EditSession` ticked from
+    `MomentonClient`; the editor reopens after a loading screen. Export waits for
+    `ClientWorld.chunkUpdaters` and caps the chunk wait at 600 render passes.
+  - Wave 5, hardening: recorded cursor only on replay screens; replays from another Minecraft version
+    greyed out in the browser; codec, `FrameTrack` and `HudToggles` tests; `FrameTrack` samples in
+    double.
+  - Wave 5, mic commentary: `audio/mic.wav` stored in the zip, metadata `micStartTick` and
+    `micSampleRate`, live sync during replay, recordings without a mic still work, mic toggle key
+    unbound by default. **The mic is not yet in exports.**
+- 29 client mixins; the first launch is itself a check (`defaultRequire = 1`).
+- Decisions: vanilla Screens, no ImGui; export before the editor; new code adds no comments.
 - Recordings in `run/momenton/recordings/`:
   - `2026-09-01_22-14-15.momenton`: 1752 ticks, the combat case. 46 swing starts (9 restarts), hits at
     89, 311, 411, 432, 1624, sweeps at 412 and 433, crits at 91 and 1625, Nether at 1055, back at 1265.
   - `2026-09-01_21-53-17.momenton`: 1782 ticks, the `UI_STATE` recording.
-  - Neither has `framebufferWidth/Height` or `guiScale` in metadata, so an export of them keeps the
+  - Neither has `framebufferWidth/Height`, `guiScale` or a mic track, so an export of them keeps the
     viewer's own GUI scale.
-- Last build: `gradlew build --offline` green. JUnit: 26 `edit/`, 3 format and 2 `FfmpegProcess` pass;
-  3 `FfmpegProcess` encode tests skip until ffmpeg is installed (re-run `gradlew test` after). And `gradlew checkReplay -Preplay=<abs path>` ALL PASS (Inspect, Setup, Motion,
-  Swing, Boundary) on both recordings. This machine's JVM needs
-  `-Djavax.net.ssl.trustStoreType=Windows-ROOT` in `org.gradle.jvmargs` to download dependencies; keep
-  it in the user-level `~/.gradle/gradle.properties`, not the project file, because CI runs on Ubuntu.
-- **ffmpeg is not installed on this machine.** Install it (`winget install ffmpeg`, then a new
-  terminal) or type its path in the export screen; `-Dmomenton.ffmpeg=<path>` also works.
+- Last build (2026-10-10): `gradlew build --offline` green. `gradlew test --offline`: 57 tests, 54
+  pass, 3 `FfmpegProcess` encode tests skip until ffmpeg is installed, 0 fail. `checkReplay` last ran
+  ALL PASS on both recordings (Wave 4). Downloads need `-Djavax.net.ssl.trustStoreType=Windows-ROOT`
+  in `org.gradle.jvmargs` in the user-level `~/.gradle/gradle.properties`, never the project file.
+- **ffmpeg is not installed on this machine.** `winget install ffmpeg` (then a new terminal), or unpack
+  it to `<gameDir>/ffmpeg/bin/`, or type its path in the export screen; `-Dmomenton.ffmpeg=<path>`
+  also works.
 
 ## Not yet verified
 
@@ -67,50 +78,39 @@ Phase 1-2 leftovers:
 
 - **Swing restarts.** `tools/Swing` measured 9 of 46 starts lost by the old rising-edge rule. Fixed in
   `UiStateDriver`, not yet watched in game.
-- **A paused replay freezes the world.** `MinecraftClientMixin` sets `MinecraftClient.paused` right
-  after `render` assigns it. Crosshair cooldown, arm, mobs and particles should stop, with no shake.
-- **Removing the attack replay costs nothing visible.** Proven from source and `tools/Effects`, but no
-  hit has been watched since. It is a deletion; check it first.
+- **A paused replay freezes the world**: crosshair cooldown, arm, mobs and particles stop, no shake.
+- **Removing the attack replay costs nothing visible.** It is a deletion; check it first.
 - **Leaving playback no longer crashes** (pause menu Disconnect, closing the window).
 - **Third person and crouch** have no regression recording. **Inventory snapshot**: seen once.
-- **Browser** row (`world   m:ss   date`), title and empty message (zero-alpha colours before Wave 3).
+- **Browser** row (`world   m:ss   date`), title and empty message.
 - **Custom payload filter** is unexercised; needs a server sending on a channel no mod claims.
 - **Recording HUD indicator** disappears on stop and survives an open screen.
 
-Wave 1:
+Wave 1: seek state merge (a `]` across a slot or hotbar change keeps it, no swing); perspective
+restore; snapshot-boundary race fix (no recording has a chunk on a boundary tick yet); snapshot timing
+log; finalise on write failure (needs a forced failure).
 
-- **Seek state merge**: a `]` seek across a slot or hotbar change keeps it, and fires no swing.
-- **Perspective restore**: after a replay ends or is left, the viewer's own perspective is back.
-- **Snapshot-boundary race fix**: `Boundary` passes, but no recording has a chunk or spawn packet on a
-  boundary tick yet.
-- **Snapshot timing** (`Snapshot N took X ms` in `latest.log`); **finalise on write failure** (needs
-  a forced failure).
+Wave 2: local prediction (break/place particles and sounds, mining crack and hit sound, eating,
+footsteps, doors, nothing twice); screens open and close on time with recorded contents and draft, ignore clicks and
+typing, `P` `[` `]` F10 work over them; cursor at any window size, version 1 recordings unchanged;
+portal warp, fire overlay, boat and horse with remount.
 
-Wave 2:
+Wave 3: export end to end (MP4 at the chosen size, fps and duration, toast); no terrain holes; motion
+matches playback; export resolution and GUI scale, window restored, resize ignored; cursor sprite and
+its toggle; Esc cancels, no toasts or pause menu in frames, replay left paused; readback under
+VulkanMod 0.6.3; recording metadata carries `framebufferWidth`, `framebufferHeight`, `guiScale`.
 
-- **Local prediction**: break/place particles and sounds, mining crack and hit sound, eating,
-  footsteps and door events are recorded as packets; nothing plays twice.
-- **Screens**: inventory, chest and chat open and close on time with recorded contents and draft;
-  clicks and typing on replayed screens do nothing; `P` `[` `]` F10 work over them.
-- **Cursor**: new recordings are format version 2; replayed screens follow the recorded cursor at any
-  window size or GUI scale; version 1 recordings play as before.
-- **Portal warp, fire overlay, vehicles**: warp builds up, fire starts on the lava tick, boat and horse
-  carry the rider along the recorded path, no jump on remount.
+Wave 4: export audio (AAC 48 kHz, length matches, in sync at start and end, also at 144 fps; speakers
+silent during export and working after); editor overlay (split, reorder, trim, delete, undo/redo, save,
+reload, play follows the edit, HUD toggles hide immediately and persist, O toggles); seeks without the
+loading screen inside a dimension; seeking back from the Nether lands in the right world.
 
-Wave 3:
-
-- **Export runs end to end**: Export button, the screen's fields, ffmpeg found on PATH or typed in,
-  an MP4 at the chosen size and fps with the right duration, a toast at the end.
-- **Frames are complete**: no terrain holes after the start seek or while chunks stream in.
-- **Motion matches playback**: camera, swing, view bobbing, crouch height and hurt tilt interpolate
-  as in live play (fixed tick progress per frame).
-- **Resolution and GUI scale**: an export at a size other than the window gets the HUD at its
-  recorded relative size; the window is restored afterwards and resizing it mid-export does nothing.
-- **Cursor sprite** drawn over replayed screens, and absent with the toggle off.
-- **Esc cancels**, other keys do nothing, toasts and the pause menu never appear in frames, the replay
-  is left paused on the last frame.
-- **Readback under VulkanMod 0.6.3** (Phase 4 gate).
-- **Recording metadata** carries `framebufferWidth`, `framebufferHeight` and `guiScale`.
+Wave 5: presets produce playable mp4/webm/mkv with the right audio codec; `export.log` written; the
+failure screen on a bad argument and on a missing ffmpeg; edited export of several clips as one video
+with clean cuts; editor `<` `>` step exactly one tick; O on a replay opened with Play; editor reopens
+after a loading screen; chunk-updater wait (no holes right after a seek or cut); recorded cursor only
+on replay screens; other-version replays greyed out; mic records to `audio/mic.wav` and plays in sync,
+following seeks and pause.
 
 ## Known issues
 
@@ -119,17 +119,21 @@ Wave 3:
 - The first build on a clean machine (or clean Gradle cache) needs network for the `1.17-SNAPSHOT` Loom.
 - A seek inside a dimension crossing shows entities before terrain. That is faithful; only a bug if
   terrain stays missing while playing (check `latest.log` for `Ignoring chunk`).
-- A seek whose snapshot-to-target span crosses a dimension still shows the loading screen (every new
-  `ClientWorld` resets the renderer). Removing it needs an extra snapshot right after each dimension
-  change, recorded.
-- `ExportSession.terrainBuilt()` does not check `ClientWorld.chunkUpdaters`, which drains at most 10%
-  per frame; a frame right after a seek could be grabbed before every snapshot chunk is scheduled.
-- `jump()` leaves the tick where it was, so the first tick after a seek shows the same tick twice.
-  Export compensates by aiming at `target + 1`; preview still shows it.
+- Backward seeks no longer flash the loading screen, except a seek whose snapshot-to-target span
+  crosses a dimension (every new `ClientWorld` resets the renderer). Removing it needs an extra
+  snapshot right after each dimension change, recorded.
+- Export: after 600 render passes the chunk wait grabs anyway with a warning, so a stuck chunk can
+  leave a hole in that frame.
 - Export: a frame re-rendered while waiting for chunks gets extra screen-animation delta, and
   wall-clock effects (enchant glint, text caret blink) are not deterministic between exports.
-- Export: the chunk wait has no cap; a chunk that never finishes stalls the export (Esc cancels).
+- Export audio: sounds that started before the export's first tick or before a cut are not heard
+  (one-shots are stopped at each cut, loops restart); a sound can start up to a frame late.
 - Export of old recordings (no `guiScale` in metadata) keeps the viewer's GUI scale.
+- The mic is not in exports yet; it records from the system default input (no device picker) and is
+  enabled by default (with no mic it logs once and records without). If attaching fails, the WAV is
+  left beside the recording as `.<name>.mic.wav`.
+- While the editor is open, replayed inventory and chat screens are held back behind it.
+- A recording with no `minecraftVersion` in metadata counts as the running version in the browser.
 - Render distance is a capture-time decision; a replay never holds more world than was sent.
 - View bobbing on a driven player is unchecked (its velocity is zeroed each tick). Check at export.
 - Sprinting is recorded (`FLAG_SPRINTING`) but not applied; FOV is already in `frames.bin`.
@@ -143,8 +147,7 @@ Wave 3:
 - Pause menu frames are recorded as ordinary frames (tick advances while the world is frozen).
 - **Snapshot-boundary race, residue:** a packet whose stamp is read just before the boundary drain but
   queued just after is lost; one stamped `at+1` but drained by `apply()` is in the snapshot and
-  replayed again (a relative entity move applies twice until the next position sync). Closing both
-  needs the stamp and the queuing to be atomic in `ClientConnectionMixin`.
+  replayed again. Closing both needs the stamp and the queuing to be atomic in `ClientConnectionMixin`.
 - Mining crumb particles (`ParticleManager.addBlockBreakingParticles`) have no packet and do not replay.
 - A replayed driven player may play its own water splash on top of the recorded one; listen for it.
 - Synthesised `ClientPlayerEntity.playSound` and hit sounds use a fresh seed, so the variant may differ.
@@ -190,7 +193,7 @@ Goal: playback of blocks, a chest, item moves, chat typing and a portal looks ri
 - [ ] 6. Screen contents: `InventoryS2CPacket` when stacks or cursor change (Wave 2; written, unverified)
 - [ ] 7. Screen kind, chat draft, playback opens and closes screens (Wave 2; written, unverified)
 - [ ] 8. Replayed screens ignore the viewer; `P` `[` `]` Esc handled there (Wave 2; written, unverified)
-- [ ] 9. Cursor normalised (format version 2) and fed to screen rendering (Wave 2; written, unverified)
+- [ ] 9. Cursor normalised (format version 2) and fed to replay screens only (Waves 2, 5; unverified)
 - [ ] 10. Portal warp and fire ticks applied at TAIL of the tick (Wave 2; written, unverified)
 - [ ] 11. `ENTITY_MOVE` for the player and its vehicle, vehicle pose applied (Wave 2; unverified)
 - [ ] 12. **Gate:** a recording with block breaking and placing, a chest, item moves, chat typing and
@@ -198,68 +201,63 @@ Goal: playback of blocks, a chest, item moves, chat typing and a portal looks ri
 
 ## Phase 4 - Export (video)
 
-All written in Wave 3, none observed.
-
-- [ ] `ExportSession`: one vanilla `MinecraftClient.render` pass per output frame, ticks from the
-      replay instead of the wall clock, fixed tick progress through a custom `RenderTickCounter`
-      record (no access widener), grab only once chunk building has settled (written, unverified)
-- [ ] Export resolution through `Window.setFramebufferWidth/Height` + `onResolutionChanged`, window
-      resize events cancelled; GUI scale `round(recordedScale * min(w/recW, h/recH))`; metadata
-      `framebufferWidth/Height` and `guiScale` (written, unverified)
-- [ ] `FrameGrabber`: 3 rotating `MAP_READ | COPY_DST` buffers, a fence per grab, rows flipped
-      top-down (written, unverified)
-- [ ] `FfmpegProcess`: `-Dmomenton.ffmpeg` or PATH, `libx264` crf 18, 3-frame bounded writer thread,
-      stderr tail in errors (written; command line and locate pass in JUnit, the encode tests skip
-      without ffmpeg)
+- [ ] `ExportSession`: one vanilla `render` pass per output frame, replay ticks instead of the wall
+      clock, fixed tick progress through a `RenderTickCounter` record, grab only once chunk building
+      and `chunkUpdaters` have settled (written, unverified)
+- [ ] Export resolution, window resize cancelled, GUI scale from metadata (written, unverified)
+- [ ] `FrameGrabber`: 3 rotating buffers, a fence per grab, rows flipped (written, unverified)
+- [ ] `FfmpegProcess` and `EncodingPreset` like ReplayMod: presets, templates, discovery, `export.log`,
+      `Output #0` startup check (written; command line, splitter and presets pass in JUnit, the 3
+      encode tests skip without ffmpeg)
+- [ ] `ExportScreen` (format, bitrate, command, arguments) and `ExportFailedScreen` (written, unverified)
 - [ ] Cursor sprite while a screen is open, with a toggle (written, unverified)
-- [ ] Export button and screen in the browser: size, fps, range, output, ffmpeg path, cursor
-      (written, unverified)
 - [ ] **Gate:** 30 s exports to 1080p60, plays in VLC, and matches an OBS side-by-side. Run once
       under VulkanMod 0.6.3 to prove the readback
 
-## Phase 5 - Game audio (Wave 4)
+## Phase 5 - Game audio
 
-- [ ] `mixin/client/audio/SoundEngineMixin`: loopback device (48 kHz stereo s16) swapped in by
-      `reloadSounds()` while exporting, restored after, also on cancel and error (written, unverified)
-- [ ] `audio/LoopbackRenderer`: `alcRenderSamplesSOFT` for `round(k*48000/fps)` cumulative samples per
-      grabbed frame; sound loads blocked on and device-change polling off while exporting (written,
-      unverified)
-- [ ] Mux: `ffmpeg -nostdin -y -i video -f s16le -ar 48000 -ac 2 -i pcm -c:v copy -c:a aac -b:a 192k
-      -shortest out` (written, unverified)
+- [ ] `SoundEngineMixin`: loopback device (48 kHz stereo s16) swapped in by `reloadSounds()` while
+      exporting, restored after, also on cancel and error (written, unverified)
+- [ ] `LoopbackRenderer`: `alcRenderSamplesSOFT` for `round(k*48000/fps)` cumulative samples per
+      grabbed frame; sound loads blocked on and device-change polling off (written, unverified)
+- [ ] Mux: `-c:v copy`, AAC 192k for mp4/mkv, libopus for webm, `-shortest` (written, unverified)
 - [ ] **Gate:** audio in sync at the end of a 30 s export
 
 ## Phase 6 - Editor on vanilla Screens
 
-- [ ] `edit/Clip`, `Timeline`, `TimelineResolver`, `UndoStack`, `Project` (`<replay>.momenton.json`)
-      as pure data (Wave 3). JUnit tests observed passing; no UI uses it yet
-- [ ] Timeline overlay screen on playback: trim, split, reorder, delete, undo/redo, save, preview
-      follows the edit (Wave 4; written, unverified)
+- [x] `edit/Clip`, `Timeline`, `TimelineResolver`, `UndoStack`, `Project`, `HudToggles` as pure data.
+      Observed in JUnit
+- [ ] Timeline overlay: trim, split, reorder, delete, undo/redo, save, one-tick stepping, preview
+      follows the edit, O and the Edit button (Waves 4-5; written, unverified)
 - [ ] Backward seeks without the loading screen: world reused in place; dimension-crossing seeks
       still show it (Wave 4; written, unverified)
 - [ ] HUD toggles via `InGameHudMixin`, ten elements, saved in the project (Wave 4; written,
       unverified)
-- [ ] Export the edited sequence (several ranges) through the same `ExportSession` (Wave 5)
+- [ ] Export the edited clip list as one video, settled at each cut (Wave 5; written, unverified)
 - [ ] **Gate:** split into three clips, reorder, trim two, undo all, reload from disk, play back as
       continuous video in the edited order, HUD toggles taking effect immediately
 
-## Phase 7 - Mic commentary (Wave 5)
+## Phase 7 - Mic commentary
 
-- [ ] `audio/WavWriter`, `audio/MicRecorder` (`TargetDataLine`, 48 kHz, own thread)
-- [ ] Tick-stamped first sample in metadata; mic device picker in settings
+- [ ] `WavWriter` (JUnit passes), `MicRecorder` (`TargetDataLine`, 48 kHz mono, own thread), staged
+      beside the recording and stored in the zip as `audio/mic.wav` (Wave 5; written, unverified)
+- [ ] First-sample tick in metadata (`micStartTick`, `micSampleRate`) (Wave 5; written, unverified)
+- [ ] Mic WAV played in sync during playback, following seeks and pause (Wave 5; written, unverified)
 - [ ] Mic as a second audio track in export; per-track gain and mute
-- [ ] Mic WAV played in sync during playback, seeking with the playhead
+- [ ] Mic device picker in settings
 - [ ] **Gate:** an export carries game audio and commentary on separate tracks, both in sync
 
-## Phase 8 - Hardening (Wave 5)
+## Phase 8 - Hardening
 
 - [ ] Full pipeline under VulkanMod 0.6.3: capture, playback, export, readback
 - [ ] Recording overhead under 1 ms per tick; negligible per-frame cost for `FrameTrackWriter`
 - [ ] Disk full, dimension change and server kick mid-recording
-- [ ] Replay from a mismatched Minecraft version rejected with a clear message
-- [ ] JUnit for `ActionCodec` round-trip and fractional `frames.bin` sampling
+- [ ] Replay from a mismatched Minecraft version greyed out in the browser with its version (Wave 5;
+      written, unverified)
+- [x] JUnit for `ActionCodec` and `EntityMoveCodec` round-trip and fractional `frames.bin` sampling
 - [ ] FFmpeg auto-download (pinned SHA-256) and hardware encoders (`h264_nvenc`, `h264_amf`,
       `h264_qsv`) with `libx264` fallback
-- [ ] A cap on the export chunk wait
+- [ ] A cap on the export chunk wait (600 render passes; Wave 5, written, unverified)
 - [ ] The rest of the multiplayer matrix
 - [ ] Export at 4K60 from a 1080p session
 - [ ] `README.md` final pass
@@ -268,65 +266,56 @@ All written in Wave 3, none observed.
 
 ## Next session
 
-**First, finish Wave 4 and run Wave 5** (coordinator, parallel agents in worktrees, then merge, build,
-`checkReplay`, update this file):
-- Wave 5 tasks:
-  1. Export the edited sequence: `ExportSettings` takes the ordered ranges from
-     `TimelineResolver.exportRanges()`, `ExportSession` seeks between ranges, the editor's Export uses it.
-  2. `ScreenCursorMixin` must only override the cursor for replay screens
-     (`ReplayScreenInput.isReplayScreen`), not the editor.
-  3. `ReplaySession.currentTick()` is one past the shown tick after a normal tick but equal to it after
-     `jump()`; make them consistent (and update `ExportSession`'s `+1` and the editor's stepping).
-  4. Add `ReplaySession.file()` so the editor key works for a replay opened with Play.
-  5. Register `EditSession`'s tick in `MomentonClient` instead of its own listener.
-  6. Restore a permanent JUnit round-trip test for `HudToggles` in `Project`.
-  7. Docs: plan says the audio design is "how ReplayMod Audio Render works" (it was built from
-     1.21.11 bytecode, not ReplayMod) and lists old audio paths; record Wave 4 in both docs.
-  8. `ExportSession.terrainBuilt()` also waits for `ClientWorld.chunkUpdaters` to drain; the editor
-     reopens itself after a seek that showed `LevelLoadingScreen`.
-  9. Docs: replace "a seek rebuilds with a fresh connection" in the plan (Phase 2, Phase 6, Lessons)
-     with the reuse-in-place design.
-  10. Then Phase 7 mic commentary and Phase 8 hardening.
-- Wave 4 in-game items to append to the list below: export has AAC 48 kHz audio matching the video
-  length, in sync at start and end (also at 144 fps), speakers silent during export and working after,
-  Esc restores sound and leaves no `momenton-video-*`/`momenton-audio-*.pcm`; editor: Edit opens the
-  replay with the timeline over an undimmed view, split twice, reorder, trim two, undo all, redo, Ctrl+S
-  writes `<replay>.momenton.json`, reload restores it, play follows the edited order, HUD toggles hide
-  each element immediately and survive reopening, O toggles the editor.
-  Seeks: on `2026-09-01_22-14-15.momenton`, `[` around 700 shows no loading screen and no holes;
-  `[` around 1200 shows a brief screen then the Nether with Nether sky; from 1350 back before 1055 and
-  playing through both crossings keeps terrain intact; no `Ignoring chunk` in `latest.log`.
-- Expected rough edges from Wave 4: sounds already playing before an export's start tick are dropped
-  (loops restart at frame 0); a sound can start up to a frame late; while the editor is open replayed
-  inventory and chat screens are held back; any backward seek still flashes the loading screen until
-  a dimension is crossed.
+1. **Install ffmpeg** (`winget install ffmpeg` and a new terminal, or unpack it to
+   `<gameDir>/ffmpeg/bin/`), check `ffmpeg -version`, then `gradlew.bat test`: the 3 skipped
+   `FfmpegProcess` encode tests now run (57 tests, all should pass).
+2. **One consolidated in-game pass**, below. Report each step as pass or fail with what was seen.
+3. **Then Wave 6:** the mic into export (second audio track, per-track gain and mute, device
+   picker), then Phase 8 hardening.
 
-**Then the user's single in-game pass.** Report each step as pass or fail with what was seen.
+The in-game pass (Waves 1-5):
 
-1. Install ffmpeg (`winget install ffmpeg`, new terminal, `ffmpeg -version`), then `gradlew.bat test`:
-   the 3 skipped `FfmpegProcess` encode tests now pass. Launch `gradlew.bat runClient`: no mixin
-   apply error (28 client mixins).
-2. Browser: title and empty message draw; rows read `world   m:ss   date`.
+1. `gradlew.bat runClient`: no mixin apply error (29 client mixins).
+2. Browser: title and empty message draw; rows read `world   m:ss   date`. Copy a recording, change
+   `minecraftVersion` in its `metadata.json`: the copy is greyed out with that version and cannot play.
 3. On `2026-09-01_22-14-15.momenton`: sweeps at 411-433, crits at 89 and 1624; swing bursts at 16-28,
    148-159, 168-178; `P` mid-swing freezes everything without shaking; `]` from near the start keeps
-   the slot and hotbar with no swing on landing; seek across 1055 and 1265; leave via Disconnect and by
-   closing the window (no `ClosedChannelException`, own perspective restored).
-4. Make one new recording covering: breaking and placing blocks, slow mining with one cancel, eating,
-   walking, a door; inventory with item moves and a cursor stack; a chest with moves and a
-   shift-click; a crafting table; a chat draft left unsent, then a sent message; a Nether portal
-   warp; lava in and out; a boat and a horse with a remount; third person and crouching; fast flying
-   across chunk borders around 25 s, 50 s and 75 s. Stop with the recording HUD visible over an open
-   screen first.
-5. Offline: `checkReplay` on it, its `metadata.json` has `framebufferWidth/Height` and `guiScale`, and
-   the `Snapshot N took X ms` lines.
-6. Replay it and check each Wave 1 and Wave 2 item in **Not yet verified**: nothing plays twice,
-   screens open and close on time and ignore clicks and typing, `P` `[` `]` F10 work over them, the
-   cursor follows at a different window size, warp, fire and vehicles look right.
-7. Export 10 s of it at 1280x720 30 fps with the window at another size (say 1600x900). Check the
-   duration, no terrain holes, the HUD at its recorded relative size, the cursor sprite over the
-   inventory, no toasts or pause menu in the video, the window restored afterwards, the replay paused
-   on the last frame. Try resizing the window mid-export.
-8. Export 10 s at 1920x1080 60 fps of a stretch with a screen open, with the cursor toggle off. Compare
-   motion with playback; check view bobbing and crouch height.
-9. Start one more export and press Esc: it stops with a toast and leaves no stuck state.
-10. Then the Phase 3 gate (task 12) and the Phase 4 gate.
+   the slot and hotbar with no swing on landing. Seeks: `[` around 700 shows no loading screen and no
+   holes; `[` around 1200 shows a brief screen then the Nether with Nether sky; from 1350 back before
+   1055 and playing through both crossings keeps terrain intact; no `Ignoring chunk` in `latest.log`.
+   Leave via Disconnect and by closing the window (no `ClosedChannelException`, own perspective back).
+4. Make one new recording with a microphone connected, talking throughout: breaking and placing
+   blocks, slow mining with one cancel, eating, walking, a door; inventory with item moves and a
+   cursor stack; a chest with moves and a shift-click; a crafting table; a chat draft left unsent,
+   then a sent message; a Nether portal warp; lava in and out; a boat and a horse with a remount;
+   third person and crouching; fast flying across chunk borders around 25 s, 50 s and 75 s. Stop with
+   the recording HUD visible over an open screen first.
+5. Offline: `checkReplay` on it; `metadata.json` has `framebufferWidth/Height`, `guiScale`,
+   `micStartTick` and `micSampleRate`; the zip holds `audio/mic.wav`; no `.mic.wav` is left in the
+   recordings folder; `latest.log` has the `Snapshot N took X ms` lines.
+6. Replay it and check the Wave 1 and Wave 2 items: nothing plays twice, screens open and close on
+   time and ignore clicks and typing, `P` `[` `]` F10 work over them, the cursor follows at another
+   window size, warp, fire and vehicles look right. The commentary plays in sync with the picture,
+   stays in sync after `[`, `]` and `P`, and stops when playback ends.
+7. Editor: Edit opens the replay with the timeline over an undimmed view; `<` and `>` move exactly one
+   tick (the clock moves 0.05 s); split twice, reorder, trim two, undo all, redo; Ctrl+S writes
+   `<replay>.momenton.json`, reopening restores it; play follows the edited order across cuts; each HUD
+   toggle hides its element immediately and survives reopening; O toggles the editor; the real mouse
+   (not the recorded cursor) works in the editor; the editor comes back after a seek that showed the
+   loading screen. Open a replay with Play, press O: the editor opens.
+8. Export 10 s at 1280x720 30 fps, MP4 default, with the window at another size (say 1600x900).
+   Check the duration, no terrain holes, the HUD at its recorded relative size, the cursor sprite over
+   the inventory, no toasts or pause menu, the window restored and the replay paused on the last
+   frame afterwards; resize the window mid-export. Audio: AAC 48 kHz, same length as the video, in
+   sync at start and end; speakers silent during export and working after. `momenton/export.log`
+   starts with `> ` and the command.
+9. Export 10 s at 1920x1080 60 fps of a stretch with a screen open, cursor toggle off. Compare motion
+   with playback; check view bobbing and crouch height. Export once more at 144 fps: audio in sync.
+10. From the editor, export three non-adjacent clips: one video whose length is the sum of the clips;
+    each cut is clean (no entities sliding across it, no sounds or particles carried over, no holes).
+11. Presets: WebM custom bitrate (Opus audio), MKV lossless and MP4 potato each give a playable file
+    with the right extension. Add a bogus argument (say `-c:v nosuchcodec`): the failure screen shows
+    the log and Back returns to the settings. Type a wrong ffmpeg path: the failure screen says so.
+12. Start one more export and press Esc: it stops with a toast, sound comes back, and no
+    `momenton-video-*` or `momenton-audio-*.pcm` is left in the exports folder.
+13. Then the gates: Phase 3 (task 12), Phase 4 (including VulkanMod 0.6.3), Phase 5, Phase 6.

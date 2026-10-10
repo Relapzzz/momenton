@@ -117,14 +117,15 @@ A zip, so each part stays independently seekable and inspectable:
 ```
 recording.momenton (zip)
   metadata.json      version, MC/mod version, duration, world name, chunk index, dimension changes,
-                     framebufferWidth/Height and guiScale at record start (null in older files)
+                     framebufferWidth/Height and guiScale at record start, micStartTick and
+                     micSampleRate (all null in older files or without a mic)
   setup.bin          the configuration-phase packets and the game join, replayed before tick 0
   chunk_0000.bin     length-prefixed actions: [varint type][varint tickDelta][payload]
   snapshot_0000.bin  full world state at that chunk boundary
   ...
   frames.bin         FIXED-STRIDE 56-byte records, one per rendered frame
   ui_0000.bin        tick-rate UI state actions
-  audio/mic.wav      48 kHz PCM, first-sample tick recorded in metadata
+  audio/mic.wav      48 kHz mono s16 WAV, STORED, added after the zip is finished
   thumb.png          preview still for the replay browser
 ```
 
@@ -181,8 +182,8 @@ live world, then `INITIAL_CHUNKS_COMING`, the world time, the player's position,
 recentre, every loaded chunk nearest-first, a spawn plus tracked data per entity, and the player's
 inventory (`InventoryS2CPacket` on sync id 0). Framing is `[varint length][packet]`, the same as
 `setup.bin`. Leading with the join is what makes a snapshot a complete rebuild rather than a patch,
-so seeking never has to undo anything: drop the connection, build a new one, apply setup and the
-snapshot, replay forward.
+so seeking never has to undo anything. Only the first load applies the join; a later seek keeps the
+connection and the `ClientWorld` and clears the world in place instead (see Phase 2).
 
 The playback side needed no code for this at all - same codec, same vanilla handlers. Two orderings
 inside it are load-bearing and invisible in the file:
@@ -350,27 +351,49 @@ not reproduce. Lunar Client Rewind has the same limitation.
 
 `export/ExportSession` does not own a loop. **Each vanilla `MinecraftClient.render` pass is one
 output frame**, and export changes only what that pass is fed, through `ExportClientMixin`. The
-contract is `ExportSettings(replay, startTick, endTick, width, height, fps, output, ffmpeg,
-drawCursor)`, built by `ui/ExportScreen`.
+contract is `ExportSettings(replay, clips, width, height, fps, output, ffmpegCommand, ffmpegArgs,
+bitrate, drawCursor)`, built by `ui/ExportScreen`.
 
-1. **Start.** Read the metadata, start ffmpeg, open the replay paused and seek to `startTick`, turn
-   vsync off, set the export resolution. The session then *settles*: it runs normally until the
-   loading screen is gone and the terrain is built, seeks to `startTick` again and unpauses.
+**The clip list.** `clips` is an ordered `List<Clip>` of `[startTick, endTick)` source ranges and
+the video is their concatenation: `frames = ceil(sum(length) * fps / 20)`. From the browser it is one
+clip from the range fields; from the editor it is `TimelineResolver.exportRanges()` and the range
+fields are hidden.
+
+**What a tick number means.** `ReplaySession.currentTick()` is the tick on screen everywhere: every
+action stamped up to it has been applied and `PovDriver` draws it. A seek to `T` leaves `T`, each
+playback tick adds exactly one, and playback ends at `durationTicks - 1`. The editor, the export
+clock and the mic sync all read it the same way.
+
+1. **Start.** Read the metadata, start ffmpeg and the audio loopback, open the replay, turn vsync
+   off, set the export resolution, then settle on frame 0's target.
 2. **Clock.** The `beginRenderTick` result in `render` is replaced, so ticks come from the replay
-   instead of the wall clock. Frame `n` targets tick `startTick + floor(n * 20 / fps)` and asks for
-   as many ticks as reach `target + 1` (a seek leaves the current tick where it was, see `jump`).
+   instead of the wall clock. Frame `n` sits at timeline offset `floor(n * 20 / fps)`, which
+   `locate()` maps through the clip list to a source tick, `target`. Each pass asks for
+   `target - currentTick` ticks, and a frame is grabbed only when `currentTick == target`.
    Driving the real client tick also drives `GameRenderer.tick`, which eases the camera's eye height;
    a loop that skipped it would freeze `cameraY` and export every crouch at the wrong height.
+   **Settle.** At the start and at every cut where the next clip does not begin where the last one
+   ended, the session pauses the replay and seeks to `target - 1`, then lets the client run with its
+   own clock until at least `PositionInterpolator.DEFAULT_INTERPOLATION_DURATION` (3) client ticks
+   have passed, no `LevelLoadingScreen` is up and the terrain is built. Then it seeks to `target - 1`
+   again, unpauses, stops one-shot sounds and clears particles, and the next pass asks for exactly
+   one real tick to reach `target`. That one tick is what gives entities and the camera a live
+   `last` position to interpolate from, so nothing slides across a cut and nothing from before it
+   is heard or seen.
 3. **Render** with a fixed tick progress `(n * 20 mod fps) / fps` and delta `20 / fps`, through a
    custom `RenderTickCounter` record passed to `GameRenderer.render` and returned by
    `getRenderTickCounter`. No access widener: `RenderTickCounter.Constant` cannot be used (see the
    three things, 1).
 4. **Grab only when the world is fully built**, after `GameRenderer.render`. A pass that is not ready
    is simply rendered again with the same tick and counter. Ready means all of:
+   `ClientWorld.chunkUpdaters` empty (it drains at most 10% per frame, so right after a seek or cut
+   some snapshot chunks are not even scheduled yet; read through `ClientWorldAccessor`),
    `WorldRenderer.isTerrainRenderComplete()`, every `BlockBufferBuilderPool` builder free (the pool's
    capacity is captured by `BlockBufferBuilderPoolMixin`), and the occlusion graph settled
    (`ChunkRenderingDataPreparer`: no terrain update scheduled or running, `needsUpdate` clear). The
-   idea is ReplayMod's `Mixin_BlockOnChunkRebuilds`; Momenton waits by re-rendering instead of blocking.
+   wait is capped at 600 render passes per frame; after that the frame is grabbed anyway with a
+   warning, so a chunk that never finishes cannot stall an export. The idea is ReplayMod's
+   `Mixin_BlockOnChunkRebuilds`; Momenton waits by re-rendering instead of blocking.
 5. **Resolution.** `Window.setFramebufferWidth/Height` then `MinecraftClient.onResolutionChanged`,
    the way vanilla `takePanorama` does it, so world and GUI both render at the export size into the
    main target. `ExportWindowMixin` cancels `onFramebufferSizeChanged` during export so a window
@@ -397,7 +420,8 @@ drawCursor)`, built by `ui/ExportScreen`.
    cannot be launched is `NotFoundException`; a failure before the log shows an `Output #0` line is
    `StartupException` (rejected arguments), any later failure `FfmpegException`; both carry the log.
    `finish` closes stdin, waits 30 s, then destroys. `ExportFailedScreen.show` explains the failure
-   with the log. The mux picks AAC for mp4/mkv and libopus for webm and appends to the same log.
+   with the log; `ExportSession` shows it on any ffmpeg failure, at start or later. The mux picks AAC
+   for mp4/mkv and libopus for webm and appends to the same log.
    Session memory only: the screen remembers the last preset, command, arguments and bitrate.
 9. **Around the frame.** Vsync off and the inactivity fps limit lifted; the pause menu never opens on
    focus loss; toasts are not drawn; keyboard input is cancelled except Esc, which cancels the export;
@@ -409,17 +433,55 @@ ffmpeg -y -f rawvideo -pix_fmt rgba -s %WIDTH%x%HEIGHT% -r %FPS% -i - %FILTERS%-
        -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p "%FILENAME%"
 ```
 
-Game audio and the mic join this command as extra inputs in Phases 5 and 7. No frame composition
-logic belongs in the export package. Export is the playback view on a fixed clock plus a readback.
+The video is encoded with `-an`; game audio is a separate raw PCM file muxed in afterwards (see
+Audio). No frame composition logic belongs in the export package. Export is the playback view on a
+fixed clock plus a readback.
 
 ### Audio: why game sound is rendered at export
 
-The world is re-simulated, so a waveform captured during play would not match your edits. At export we
-mixin `SoundEngine.init(String deviceSpecifier, boolean directionalAudio)` to open an
-`ALC_SOFT_loopback` device and drive `alcRenderSamplesSOFT` ourselves, requesting **exactly the sample
-count matching each rendered frame's duration**. That gives sample-exact A/V sync no matter how slowly
-the offline render runs, and it is how ReplayMod Audio Render works. The tick-stamped mic WAV is muxed
-in as a second track.
+The world is re-simulated, so a waveform captured during play would not match your edits. At export
+the sound engine is moved onto an `ALC_SOFT_loopback` device and Momenton drives
+`alcRenderSamplesSOFT` itself, requesting **exactly the sample count matching each grabbed frame**.
+That gives sample-exact A/V sync no matter how slowly the offline render runs. The design was built
+from the 1.21.11 bytecode of `SoundEngine` and `SoundSystem`, not taken from ReplayMod.
+
+- `audio/LoopbackRenderer.start` sets a static `active` flag and calls `SoundManager.reloadSounds()`,
+  so vanilla tears the engine down and runs `SoundEngine.init` again. `close` clears the flag, deletes
+  the PCM file and reloads again, which puts the real device back; `ExportSession.end` runs it on
+  success, cancel and error alike.
+- `mixin/client/audio/SoundEngineMixin` wraps `openDeviceOrFallback` to return
+  `alcLoopbackOpenDeviceSOFT(null)` while active, and replaces `createAttributes` with 48 kHz, stereo,
+  `ALC_SHORT_SOFT`, HRTF as vanilla asked, output limiter on.
+- `mixin/client/audio/SoundSystemMixin` joins the static and streamed sound loads in `play` while
+  active (a sound that is still loading would otherwise start frames late, or never, because the
+  loopback only advances when rendered), and returns false from `shouldReloadSounds`, so the
+  device-change poll cannot swap the loopback back to a real device mid-export.
+- Per grabbed frame `k`, `render()` first flushes the sound executor's queue
+  (`SoundExecutor.submitAndJoin`), then renders `round(k * 48000 / fps) - samplesSoFar` samples, so the
+  total never drifts by more than one sample, and appends them to `momenton-audio-<name>.pcm`.
+- At a cut, `stopOneShots()` stops every non-repeating sound still playing, so nothing from before
+  the cut is heard after it.
+- `FfmpegProcess.mux` then runs `ffmpeg -nostdin -y -i video -f s16le -ar 48000 -ac 2 -i pcm -c:v copy
+  -c:a aac|libopus -b:a 192k -shortest output` (Opus for `.webm`) and appends its output to
+  `export.log`. The temporary `momenton-video-*` and PCM files are deleted however the export ends.
+
+**Mic commentary** is recorded live, because a voice cannot be re-simulated.
+
+- `audio/MicRecorder` opens the default `TargetDataLine` at 48 kHz mono s16 on its own platform
+  thread when recording starts and streams it through `audio/WavWriter` to `.<name>.mic.wav` beside
+  the staging directory. The first sample's tick is
+  `originTick + (nanoTime at line.start - nanoTime at F9) / 50 ms`, where `originTick` is the next
+  frame's fractional tick (`1 + tickProgress`). No microphone logs once and records without one.
+- At stop, after `ReplayWriter.finish` has written the zip, `MicTrack.attach` adds the WAV as a
+  STORED `audio/mic.wav` entry through a zip `FileSystem` and deletes the loose file; metadata carries
+  `micStartTick` and `micSampleRate`. STORED keeps the entry seekable for playback.
+- **Sync rule** (`audio/MicPlayback`, client tick, never while exporting): the expected sample is
+  `round((currentTick + tickProgress - micStartTick) * sampleRate / 20)`. A playback thread streams
+  the entry into a `SourceDataLine`, writing silence before the track starts and after it ends. It
+  re-seeks when the tick jumps (anything but the same tick or the next) or when playback drifts more
+  than 3 ticks from the expected position, and stops the line while paused.
+- The mic is not in exports yet (Wave 6): it joins the mux as a second audio track with its own gain
+  and mute, starting at `micStartTick` mapped through the clip list.
 
 Consequence to accept: the live preview has no mixed game audio - the engine makes its own sound
 during playback, and the mic WAV is played back in sync as a preview-only convenience.
@@ -547,7 +609,7 @@ Do not reinvent anything on this list.
 
 | Source | Licence | What to take |
 |---|---|---|
-| **ReplayMod** (github.com/ReplayMod/ReplayMod) | GPLv3 | The primary reference to lift from. Packet recording and filtering, replay playback over a fake connection, seeking, and especially its OpenAL loopback audio render. GPL obligations attach to distribution, so a private mod can borrow freely. |
+| **ReplayMod** (github.com/ReplayMod/ReplayMod) | GPLv3 | The primary reference to lift from. Packet recording and filtering, replay playback over a fake connection, seeking, and its ffmpeg export settings. GPL obligations attach to distribution, so a private mod can borrow freely. |
 | **VulkanMod** | LGPL-3.0 | Read its `GpuDevice` implementation to learn which Blaze3D paths it actually supports before relying on one. |
 | **Minecraft** (via `./gradlew genSources`) | - | The authority for HUD and screen rendering order, and for every Yarn name above. |
 | **Flashback** (github.com/Moulberry/Flashback) | **All rights reserved** | Read for understanding only. Its licence is `Do not redistribute. All rights reserved.`, granting no copying or modification rights; private use does not change that. Its architecture is already documented in this file; reimplement from that, and use ReplayMod when actual code is wanted. |
@@ -612,13 +674,29 @@ Built without the planned `Seeker` and `SnapshotIO` classes. Seeking is a few li
 ticks - because loading a snapshot is already what starting playback does. Writing a snapshot is
 `record/WorldSnapshot` producing packets, and reading is the packet path that already existed.
 
-**A snapshot is not free, so a seek only loads one when it has to.** Loading one means a join packet,
-which means `MinecraftClient.joinWorld`, which means the viewer watches the terrain-loading screen.
-Only a *backward* seek needs a snapshot, because packets cannot be un-applied. A forward seek is
-playback run without waiting for ticks, over the world that is already loaded. `jump` rebuilds only
-when the target is behind the playhead or more than one chunk's worth of ticks ahead. Removing the
-screen from a backward seek needs playback to reuse the existing `ClientWorld` instead of rejoining;
-that belongs to the editor phase, because the scrubber seeks constantly.
+**A snapshot is not free, so a seek only loads one when it has to.** Only a *backward* seek needs a
+snapshot, because packets cannot be un-applied. A forward seek is playback run without waiting for
+ticks, over the world that is already loaded. `jump` loads a snapshot only when the target is behind
+the playhead or more than one chunk's worth of ticks ahead.
+
+**A seek reuses the world in place (Wave 4).** Applying a snapshot's join packet means
+`MinecraftClient.joinWorld`, a new `ClientWorld` and the terrain-loading screen, so only the first
+load does it. `OfflineConnection.applySnapshot` keeps one connection for the whole session and, once
+a world exists, removes the join from the snapshot and instead:
+
+- if the snapshot is in the current dimension, clears the world in place: an `UnloadChunkS2CPacket`
+  for every chunk it fed that the snapshot does not resend (it tracks fed chunks itself), one
+  `EntitiesDestroyS2CPacket` for every entity but the player, all sounds stopped, particles cleared,
+  game modes from the join, a `DeathScreen` closed;
+- if it is in another dimension, feeds a `PlayerRespawnS2CPacket(spawn, KEEP_ALL)` built from the
+  join, which makes the right `ClientWorld` the way a portal does;
+- then `ChunkLoadDistanceS2CPacket` with the join's view distance, and the rest of the snapshot.
+
+This also fixed a latent bug: the old rejoin reused the player, so seeking back from the Nether to an
+Overworld snapshot loaded Nether chunks into the Overworld world. A seek whose snapshot-to-target span
+crosses a dimension change still shows the loading screen, because the recorded respawn builds a new
+`ClientWorld` and that resets the renderer; removing it needs a snapshot recorded right after each
+dimension change. The editor reopens itself once such a loading screen closes.
 
 **A dimension change is a second join in the middle of the stream, and it needs the same three
 things.** `PlayerRespawnS2CPacket` builds a new `ClientWorld`; after it the client needs a player
@@ -692,7 +770,8 @@ portal plays back right, checked visually. Record once on a local `runServer` se
 `export/ExportSettings.java`, `ExportSession.java`, `FrameGrabber.java`, `FfmpegProcess.java`,
 `ChunkBufferPool.java`, `mixin/client/export/*` (client render, game renderer, keyboard, window,
 block buffer pool, chunk graph accessor), `ui/ExportScreen.java` reached from an Export button in the
-replay browser (size, fps, tick range, output, ffmpeg path, cursor toggle), and the cursor sprite
+replay browser or the editor (size, fps, range, format, bitrate, output, ffmpeg command and
+arguments, cursor toggle), `export/EncodingPreset.java`, `ui/ExportFailedScreen.java`, and the cursor sprite
 `assets/momenton/textures/gui/cursor.png`. See the Export section.
 
 **Done when:** 30 seconds exports to 1080p60, plays in VLC, and matches a side-by-side OBS capture of
@@ -701,15 +780,17 @@ readback.
 
 ### Phase 5 - Game audio
 
-`mixin/client/SoundEngineMixin.java`, `audio/LoopbackRenderer.java`. The OpenAL loopback renders
-exactly the samples for each frame, muxed by ffmpeg.
+`audio/LoopbackRenderer.java`, `mixin/client/audio/SoundEngineMixin.java`, `SoundSystemMixin.java`,
+`SoundManagerAccessor.java`, `SoundSystemAccessor.java`, `FfmpegProcess.mux`. The OpenAL loopback
+renders exactly the samples for each grabbed frame, muxed by ffmpeg (see Audio).
 
 **Done when:** game audio is in sync at the end of a 30-second export.
 
 ### Phase 6 - Editor on vanilla Screens
 
 `edit/Project.java`, `edit/Clip.java`, `edit/Timeline.java`, `edit/TimelineResolver.java`,
-`edit/UndoStack.java`, a timeline overlay screen, `mixin/client/hud/InGameHudMixin.java`
+`edit/UndoStack.java`, `edit/HudToggles.java`, `ui/editor/EditorScreen.java`,
+`ui/editor/EditSession.java`, `mixin/client/hud/InGameHudMixin.java`
 
 `edit/` is pure data with JUnit tests (written in Wave 3). `Clip` is a `[startTick, endTick)` source
 range; `Timeline` is immutable, and `split`, `trimStart`, `trimEnd`, `move` and `delete` each return a
@@ -719,12 +800,25 @@ export, and `exportRanges()` gives the clips in order. `UndoStack` stores previo
 edit that changes nothing is not pushed). `Project` saves the replay's file name and timeline as
 `<replay>.momenton.json` beside the recording.
 
-The timeline is an overlay on the playback view (trim, split, reorder, undo) and export hides it.
-Seeking across a cut is the expensive case: keep the `ReplaySession` warm and only re-seek when the
-resolved clip changes. Backward seeks must no longer show the loading screen, so playback reuses the
-existing `ClientWorld`. HUD toggles gate the per-element `InGameHud` methods. Overlay, HUD toggles and
-the loading-screen-free seek are Wave 4. Exporting the edited sequence (several ranges through the
-same `ExportSession`, which today takes one `startTick`/`endTick` range) moves to Wave 5.
+The timeline is an overlay on the playback view and export hides it. `EditorScreen` is a vanilla
+`Screen` with no background dim: step `<` `>` one tick (pausing first), play/pause, split at the
+playhead, delete, undo/redo (Ctrl+Z, Ctrl+Shift+Z, Ctrl+Y), a HUD panel, save (Ctrl+S, and on close),
+and Export, which opens `ExportScreen` with the clip list. Clips are dragged to reorder, their edges
+to trim, and a click seeks. `EditSession` holds the `UndoStack`, the HUD toggles and the current clip
+index; it is opened by the browser's Edit button or toggled by O on any playing replay (it finds the
+file through `ReplaySession.file()`), ticked from `MomentonClient`, and, until dismissed, puts its
+screen back whenever no screen, a replayed inventory or a chat screen is up, so it reappears after a
+loading screen. While playing it follows the edit: at
+the last tick of a clip it moves to the next and, if that clip does not continue the source, seeks to
+its `startTick - 1` so the next playback tick lands on its first tick; after the last clip it pauses.
+Seeks stay warm because the world is reused in place (see Phase 2).
+
+HUD toggles (`HudToggles`, ten elements, saved in the project) gate the per-element `InGameHud`
+methods at HEAD, and the experience bar's `Bar` calls in `renderMainHud` with `@WrapWithCondition`.
+They apply only while a replay plays with an edit session, so live play is never affected.
+
+The edited sequence exports through the same `ExportSession` as one video (see Export, the clip list
+and the settle at each cut).
 
 **Done when:** you can split a replay into three clips, reorder them, trim two, undo it all, reload
 from disk, and play the result back as continuous video that honours the edited order, with HUD
@@ -732,16 +826,19 @@ toggles taking effect immediately.
 
 ### Phase 7 - Mic commentary
 
-`audio/MicRecorder.java`, `audio/WavWriter.java`. `TargetDataLine` at 48 kHz on its own thread, the
-first sample's tick in metadata, a device picker, and a second audio track in export.
+`audio/MicRecorder.java`, `audio/WavWriter.java`, `audio/MicTrack.java`, `audio/MicPlayback.java`,
+`ReplayMetadata.micStartTick/micSampleRate`, an unbound mic toggle key (see Audio, mic commentary).
+Recording, storage and in-sync playback are written (Wave 5). Still to come (Wave 6): a device picker,
+and the mic as a second audio track in export with per-track gain and mute.
 
 **Done when:** an export carries game audio and commentary on separate tracks, both in sync.
 
 ### Phase 8 - Hardening
 
 Run the whole pipeline under VulkanMod 0.6.3. Measure recording overhead (target under 1 ms per tick).
-Handle disk full mid-recording (finalise, never delete), dimension change, server kick while
-recording, and replays from a mismatched Minecraft version. FFmpeg auto-download with a pinned
+Handle disk full mid-recording (finalise, never delete), dimension change and server kick while
+recording. Replays from another Minecraft version are greyed out in the browser with their version
+(`ReplayReader.recordedInRunningVersion`, Wave 5). FFmpeg auto-download with a pinned
 SHA-256 manifest, hardware encoders (`h264_nvenc`, `h264_amf`, `h264_qsv`) with `libx264` fallback,
 and the rest of the multiplayer matrix.
 
@@ -799,9 +896,32 @@ and the export screen first, then three agents:
 | Export loop | `ExportSession`, export mixins, metadata framebuffer size and GUI scale, cursor sprite | `export/` rest, `mixin/client/export/`, `Recorder` metadata |
 | Edit model | `edit/*` pure data with JUnit | `edit/`, `src/test/.../edit/` |
 
-**Wave 4 (running):** game audio loopback in export; the editor timeline overlay with HUD toggles;
-backward seek without the loading screen.
-**Wave 5:** export the edited sequence (several ranges), mic commentary, then hardening.
+**Wave 4 (merged 2026-10-09): three agents, no stubs.**
+
+| Agent | Task | Owns |
+|---|---|---|
+| Game audio | Loopback render per grabbed frame, mux | `audio/LoopbackRenderer`, `mixin/client/audio/*`, `FfmpegProcess.mux`, audio hooks in `ExportSession` |
+| Editor | Timeline overlay, Edit button, key O, HUD toggles saved in the project | `ui/editor/*`, `edit/HudToggles`, `edit/Project`, `mixin/client/hud/InGameHudMixin`, `MomentonKeybinds`, browser button |
+| Seek | Reuse the `ClientWorld` on seeks | `playback/OfflineConnection`, `playback/ReplaySession` |
+
+**Wave 5 (merged 2026-10-10).** The coordinator first committed the contract (`5705711`):
+`ExportSettings` takes `clips`, `ffmpegCommand`, `ffmpegArgs` and `bitrate`. Then:
+
+| Agent | Task | Owns |
+|---|---|---|
+| Edited export | Clip-list export with a settle at each cut, `currentTick` as the tick on screen, `ReplaySession.file()`, `EditSession` ticked from `MomentonClient`, editor reopens after a loading screen, `chunkUpdaters` wait and the 600-pass cap | `export/ExportSession`, `ClientWorldAccessor`, `playback/ReplaySession`, `ui/editor/*` |
+| ffmpeg | ReplayMod-style presets, templates, discovery, `export.log`, failure screen | `export/EncodingPreset`, `export/FfmpegProcess`, `ui/ExportScreen`, `ui/ExportFailedScreen`, `FfmpegProcessTest` |
+| Mic | Record, store and play back commentary | `audio/Mic*`, `audio/WavWriter`, `ReplayMetadata`, mic hooks in `Recorder`, `WavWriterTest` |
+| Hardening (committed on `main`) | Cursor only on replay screens, version-mismatched replays greyed out, codec and `HudToggles` tests, `FrameTrack` in double | `ScreenCursorMixin`, `PovDriver`, `ReplayReader`, `ReplayBrowserScreen`, `src/test/.../format`, `HudTogglesTest` |
+| Docs | Both state files, after the merge | `*.md` |
+
+The coordinator then wired `ExportFailedScreen` into `ExportSession` failures and moved
+`MicPlayback` onto `ReplaySession.file()` and the on-screen tick (`6bbb1be`).
+
+**Wave 6 (next, after the consolidated in-game pass):** the mic as a second audio track in export
+(offset from `micStartTick` through the clip list, per-track gain and mute in `ExportSettings`), a
+mic device picker, then Phase 8 hardening (disk full, kick and dimension change mid-recording,
+recording overhead, VulkanMod run, ffmpeg auto-download and hardware encoders, 4K60).
 
 ---
 
@@ -810,7 +930,7 @@ backward seek without the loading screen.
 | Risk | Mitigation |
 |---|---|
 | VulkanMod's `GpuDevice` misses a readback path | Readback uses only the path vanilla screenshots use (`copyTextureToBuffer` + `mapBuffer`); the Export gate runs once under VulkanMod 0.6.3 |
-| Exported frames have holes from async chunk builds | Export re-renders until terrain, block buffer pool and occlusion graph are all settled before grabbing (no cap yet) |
+| Exported frames have holes from async chunk builds | Export re-renders until `chunkUpdaters`, terrain, block buffer pool and occlusion graph are all settled before grabbing, capped at 600 passes |
 | HUD is the wrong size at a different export resolution | GUI-scale rule: metadata stores the recording's window size and GUI scale, export picks the scale that keeps the HUD's relative size |
 | Exported motion feels subtly wrong | `frames.bin` at render-frame rate plus a fixed per-frame `RenderTickCounter`; validated against a side-by-side OBS capture at the Export gate |
 | Preview and export disagree | Prevented structurally: both are vanilla `GameRenderer.render` over the same playback, and one `TimelineResolver` |
@@ -899,7 +1019,13 @@ Rules discovered while building. Each one cost a failed run or a wrong fix; do n
   `OfflineConnection` only drains outbound.
 - Playback packets pass through the recording tap; the playback channel carries a `Momenton.PLAYBACK`
   attribute (on `Momenton`, so `record` does not depend on `playback`).
-- A forward seek needs no snapshot; only a backward seek rebuilds.
+- A forward seek needs no snapshot; only a backward seek loads one.
+- A seek after the first load must not apply the snapshot's join: rejoining reused the old player and
+  loaded the snapshot's chunks into whatever world was current (Nether chunks in the Overworld).
+  Clear the world in place, or respawn into the snapshot's dimension, and keep one connection.
+- One meaning for a tick number everywhere: `currentTick()` is the tick on screen. When a seek left
+  it equal to the target but a normal tick left it one past, export needed `target + 1`, the first
+  tick after a seek showed twice, and the editor stepped wrong.
 - Playback never needed a world, only a way in: the title-screen button via `ScreenEvents.AFTER_INIT`.
 - "Is playback over" asks the connection, which closes first, not `client.world`, which goes second;
   `stop()` skips its own disconnect when the channel is already closed.
@@ -953,3 +1079,14 @@ Rules discovered while building. Each one cost a failed run or a wrong fix; do n
   window resize events, rather than a separate render target.
 - A text colour with zero alpha draws nothing on 1.21.11; write colours as `0xFFRRGGBB` (the browser's
   title and empty message were invisible until Wave 3).
+- `ClientWorld.chunkUpdaters` drains at most 10% per frame, so "terrain render complete" can be true
+  while snapshot chunks are not yet scheduled. Wait for it to empty too, and cap the wait.
+- A cut needs a settle: seek to `target - 1`, let at least the entity interpolation duration (3 client
+  ticks) pass, seek again, stop one-shot sounds and clear particles, then one real tick to `target`.
+
+**Audio**
+- The loopback device needs no engine of its own: set a flag and call `reloadSounds()`, and vanilla
+  re-runs `SoundEngine.init` through the mixin. Turn off `shouldReloadSounds` while exporting, or the
+  device-change poll swaps the real device back in.
+- With a loopback, time only advances when samples are rendered, so an asynchronous sound load can
+  start a sound frames late; block on the load while exporting.
