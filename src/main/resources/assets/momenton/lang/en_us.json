@@ -67,5 +67,22 @@
   "screen.momenton.export.failed.stopped": "ffmpeg stopped during the export.",
   "screen.momenton.export.failed.stopped.hint": "Full log: %s",
   "screen.momenton.export.failed.back": "Back to settings",
-  "screen.momenton.export.failed.close": "Close"
+  "screen.momenton.export.failed.close": "Close",
+  "screen.momenton.export.preset.mp4_qsv": "MP4, hardware (Intel Quick Sync)",
+  "screen.momenton.export.preset.mp4_nvenc": "MP4, hardware (NVIDIA NVENC)",
+  "screen.momenton.export.preset.mp4_amf": "MP4, hardware (AMD AMF)",
+  "screen.momenton.export.rendering": "Rendering video",
+  "screen.momenton.export.frames": "%s / %s frames (%s%%)",
+  "screen.momenton.export.elapsed": "Elapsed: %s",
+  "screen.momenton.export.remaining": "Remaining: %s",
+  "screen.momenton.export.fps": "%s frames per second",
+  "screen.momenton.export.preparing": "Preparing the first frame",
+  "screen.momenton.export.draining": "Reading back the last frames",
+  "screen.momenton.export.preview_off": "Preview off",
+  "screen.momenton.export.hint.preview_on": "Esc: cancel    P: hide preview",
+  "screen.momenton.export.hint.preview_off": "Esc: cancel    P: show preview",
+  "screen.momenton.export.finishing": "Finishing video",
+  "screen.momenton.export.encoding": "Encoding the last frames",
+  "screen.momenton.export.muxing": "Adding the audio",
+  "screen.momenton.export.cancelling": "Cancelling"
 }

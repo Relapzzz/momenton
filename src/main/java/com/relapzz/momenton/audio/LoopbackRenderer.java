@@ -14,7 +14,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
@@ -95,9 +94,8 @@ public final class LoopbackRenderer implements AutoCloseable {
 		device = 0;
 		try {
 			pcm.close();
-			Files.deleteIfExists(path);
 		} catch (IOException e) {
-			Momenton.LOGGER.warn("Could not delete {}", path, e);
+			Momenton.LOGGER.warn("Could not close {}", path, e);
 		}
 		client.getSoundManager().reloadSounds();
 	}

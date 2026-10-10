@@ -2,8 +2,10 @@ package com.relapzz.momenton.mixin.client.export;
 
 import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import com.llamalad7.mixinextras.injector.ModifyReturnValue;
+import com.relapzz.momenton.export.EncoderProbe;
 import com.relapzz.momenton.export.ExportSession;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.RunArgs;
 import net.minecraft.client.render.RenderTickCounter;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -27,6 +29,17 @@ public class ExportClientMixin {
 			target = "Lnet/minecraft/client/render/GameRenderer;render(Lnet/minecraft/client/render/RenderTickCounter;Z)V"))
 	private RenderTickCounter momenton$exportCounter(RenderTickCounter counter) {
 		return ExportSession.counter(counter);
+	}
+
+	@Inject(method = "<init>", at = @At("TAIL"))
+	private void momenton$probeEncoders(RunArgs args, CallbackInfo info) {
+		EncoderProbe.start();
+	}
+
+	@Inject(method = "render", at = @At(value = "INVOKE",
+			target = "Lnet/minecraft/client/render/GameRenderer;render(Lnet/minecraft/client/render/RenderTickCounter;Z)V"))
+	private void momenton$exportRenderStart(boolean tick, CallbackInfo info) {
+		ExportSession.beforeRender();
 	}
 
 	@Inject(method = "render", at = @At(value = "INVOKE",

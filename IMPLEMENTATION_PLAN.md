@@ -401,36 +401,91 @@ clock and the mic sync all read it the same way.
 6. **GUI scale** = `round(recordedGuiScale * min(width / recordedWidth, height / recordedHeight))`,
    at least 1, injected into `onResolutionChanged`'s `calculateScaleFactor` call. Recordings from
    before Wave 3 have null `framebufferWidth/Height` and `guiScale`, and keep the viewer's scale.
-7. **Readback** (`FrameGrabber`). Three rotating `GpuBuffer`s with `USAGE_MAP_READ | USAGE_COPY_DST`;
-   each grab is `copyTextureToBuffer` plus its own `createFence()`, mirroring vanilla's
-   `MappableRingBuffer`, and a slot is mapped only when it comes round again (or at `flush`). Rows
-   are flipped to top-down, as `ScreenshotRecorder` does.
+7. **Readback** (`FrameGrabber`), never blocking the render thread on a fence. Three `GpuBuffer`s
+   with `USAGE_MAP_READ | USAGE_COPY_DST` form a free pool. A grab takes a free buffer and calls
+   `copyTextureToBuffer` with a callback; vanilla queues that callback behind its own fence
+   (`RenderSystem.queueFencedTask`) and `RenderSystem.executePendingTasks`, at the start of every
+   `MinecraftClient.render` pass, runs it only once `awaitCompletion(0)` reports the fence done, in
+   order. The callback maps the buffer, hands it to `FfmpegProcess.writeFrame` and returns the buffer
+   to the pool. If the pool is empty the pass is a readback stall and the same frame is rendered again.
+   Why: `GlGpuFence.awaitCompletion` is `glClientWaitSync` with flags 0 (no
+   `GL_SYNC_FLUSH_COMMANDS_BIT`), so waiting on a fence whose commands were never flushed can block
+   forever; the old `flush()` did exactly that after the last grab, before any buffer swap, and hung
+   an Intel iGPU export at 100%. The only blocking fence waits left in a pass are vanilla's own
+   `MappableRingBuffer.getBlocking` calls in `GuiRenderer`; the progress overlay renders the GUI a
+   second time per pass, so the three-slot ring rotates twice per pass and the slot it waits on was
+   fenced at least one pass earlier, i.e. before a `glfwSwapBuffers`, which flushes.
+   **Drain.** After the last grab the session keeps rendering passes with zero ticks and grabs
+   nothing until every callback has run, then checks that the delivered frame count equals the
+   planned count (logged; a mismatch fails the export) and hands off.
 8. **Encode** (`FfmpegProcess`, `EncodingPreset`), ReplayMod's model. The export screen holds an
-   ffmpeg command and an argument template, both editable; picking a preset (MP4 default quality
-   `-preset medium -crf 18`, MP4 custom bitrate, MP4 potato, WebM custom bitrate, MKV lossless)
-   resets the template and the output extension. The command defaults to `-Dmomenton.ffmpeg`, then on
-   Windows `<gameDir>/ffmpeg/bin/ffmpeg.exe` or any `ffmpeg.exe` within four levels of the game
-   directory (skipping `saves`, `momenton`, `logs`, `assets` and the like), on macOS
-   `/usr/local/bin`, `/usr/bin` and the newest Homebrew Cellar build, else plain `ffmpeg` from PATH.
+   ffmpeg command and an argument template, both editable; picking a preset resets the template and
+   the output extension. Presets: MP4 hardware (`h264_nvenc`, `h264_amf`, `h264_qsv`, each offered only
+   when it works), MP4 default (`libx264 -preset superfast -crf 18`), MP4 custom bitrate, MP4 potato,
+   WebM custom bitrate, MKV lossless. The first working hardware preset is the default.
+   `EncoderProbe` runs once per game session from `MinecraftClient.<init>` on a background thread:
+   for each hardware preset a one-frame `lavfi` encode to `-f null`, 15 s timeout.
+   Parameters were chosen by measurement on a 5 s 1080p60 clip panned and zoomed over real Minecraft
+   screenshots (SSIM/PSNR against the source in yuv420p, ffmpeg 9.0.2, i5-1235U, Iris Xe):
+
+   | Encoder and settings | CPU s | wall fps | size | SSIM | PSNR dB |
+   |---|---|---|---|---|---|
+   | libx264 medium crf 18 (old default) | 38.4 | 65 | 5.9 MB | 0.9826 | 45.21 |
+   | libx264 veryfast crf 16 | 19.4 | 117 | 8.7 MB | 0.9832 | 45.39 |
+   | libx264 superfast crf 18 (software default) | 9.2 | 180 | 12.0 MB | 0.9862 | 46.32 |
+   | libx264 ultrafast crf 17 | 4.8 | 198 | 23.1 MB | 0.9857 | 46.55 |
+   | h264_qsv medium gq 20 | 3.3 | 111 | 7.8 MB | 0.9803 | 44.63 |
+   | h264_qsv medium gq 17 (hardware default) | 2.3 | 119 | 10.8 MB | 0.9841 | 45.58 |
+   | h264_qsv medium gq 16 | 3.9 | 96 | 12.5 MB | 0.9861 | 46.25 |
+
+   CPU seconds include about 1.9 s of rgba to yuv conversion and file reading that every row pays.
+   The game and the encoder share the CPU, so CPU time per frame is what limits an export; both
+   defaults match or beat the old default's SSIM for a quarter (software) or a sixteenth
+   (hardware) of its CPU. NVENC (`p5 hq vbr cq 19`) and AMF (`cqp 18/20`) are unmeasured here.
    `%WIDTH% %HEIGHT% %FPS% %FILENAME% %BITRATE% %FILTERS%` are substituted (FILENAME is the bare
    name, ffmpeg runs in the output folder, BITRATE is bits per second, FILTERS is empty), and the
-   string is split on whitespace with double quotes grouping. Raw RGBA goes to stdin from a writer
-   thread through a queue bounded at three frames; stdout and stderr are merged and teed to
-   `<gameDir>/momenton/export.log` (first line `> ` plus the command) and memory. A process that
-   cannot be launched is `NotFoundException`; a failure before the log shows an `Output #0` line is
-   `StartupException` (rejected arguments), any later failure `FfmpegException`; both carry the log.
-   `finish` closes stdin, waits 30 s, then destroys. `ExportFailedScreen.show` explains the failure
-   with the log; `ExportSession` shows it on any ffmpeg failure, at start or later. The mux picks AAC
-   for mp4/mkv and libopus for webm and appends to the same log.
+   string is split on whitespace with double quotes grouping. The command defaults to
+   `-Dmomenton.ffmpeg`, then on Windows `<gameDir>/ffmpeg/bin/ffmpeg.exe`, any `ffmpeg.exe` within
+   four levels of the game directory (skipping `saves`, `momenton`, `logs`, `assets` and the like) or
+   a winget install, on macOS `/usr/local/bin`, `/usr/bin` and the newest Homebrew Cellar build, else
+   plain `ffmpeg` from PATH. `writeFrame` flips the bottom-up readback straight into one of three
+   pooled `byte[]`s (one copy) and a writer thread pipes it to stdin; stdout and stderr are merged and
+   teed to `<gameDir>/momenton/export.log` (first line `> ` plus the command) and memory, and the
+   reader parses `frame=` for progress. A process that cannot be launched is `NotFoundException`; a
+   failure before the log shows an `Output #0` line is `StartupException` (rejected arguments), any
+   later failure `FfmpegException`; both carry the log. `finish` closes stdin and waits as long as the
+   reported frame count keeps rising, killing ffmpeg only after 60 s without progress.
    Session memory only: the screen remembers the last preset, command, arguments and bitrate.
-9. **Around the frame.** Vsync off and the inactivity fps limit lifted; the pause menu never opens on
-   focus loss; toasts are not drawn; keyboard input is cancelled except Esc, which cancels the export;
-   the cursor sprite `textures/gui/cursor.png` is drawn after the screen when enabled. At the end the
-   replay is left paused on the last frame and a toast reports the result.
+9. **Finish off the render thread.** At hand-off the render thread restores the window: GUI scale,
+   real framebuffer size, vsync, the sound device (`LoopbackRenderer.close`, which keeps the PCM), and
+   leaves the replay paused. `ExportFinisher` then runs `ffmpeg.finish()` and the audio mux on its own
+   thread while `ui/ExportFinishingScreen` shows "Finishing video" with a progress bar (encoded frames,
+   then the mux's `time=`), the elapsed time and Cancel (Esc too). Cancel kills ffmpeg or the mux and
+   deletes the temporaries and a partial output. When done the screen returns to the screen that was
+   open and toasts the result, or shows `ExportFailedScreen`.
+10. **Progress overlay** (`ui/ExportProgressOverlay`), after ReplayMod's `GuiVideoRenderer`. The
+   window never shows the raw replay: after each pass's grab has been recorded, the overlay clears the
+   GUI state, draws into the main target and runs `GuiRenderer.render` a second time (through
+   `ExportGameRendererAccessor`), so it is never in the video. It shows a progress bar with frames
+   done and total, elapsed, remaining (from the last 50 frames), render fps and a preview of the last
+   grabbed frame, copied on the GPU with `copyTextureToTexture` into a texture registered as
+   `momenton:export_preview` and drawn flipped. P toggles the preview, Esc cancels. Because
+   `presentTexture` blits 1:1, the overlay is laid out inside the part of the export-size target that
+   the real window shows.
+11. **Instrumentation.** Every 5% the log line carries, per grabbed frame since the last line: fps,
+   render passes, wall ms per pass, `GameRenderer.render` ms, settle ms, terrain-wait ms, readback
+   stalls, copy ms (map and flip), ms blocked waiting for a free ffmpeg buffer, audio ms
+   (`submitAndJoin` plus `alcRenderSamplesSOFT` plus the PCM write) and overlay ms, plus ffmpeg's
+   encoded frame count.
+12. **Around the frame.** Vsync off and the inactivity fps limit lifted; the pause menu never opens on
+   focus loss; toasts are not drawn; keyboard input is cancelled except Esc, which cancels the export,
+   and P; the cursor sprite `textures/gui/cursor.png` is drawn after the screen when enabled. Stale
+   `momenton-video-<name>` and `momenton-audio-<name>.pcm` from an earlier run with the same output
+   name are deleted at start.
 
 ```
 ffmpeg -y -f rawvideo -pix_fmt rgba -s %WIDTH%x%HEIGHT% -r %FPS% -i - %FILTERS%-an \
-       -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p "%FILENAME%"
+       -c:v h264_qsv -preset medium -global_quality 17 -look_ahead 0 -pix_fmt nv12 "%FILENAME%"
 ```
 
 The video is encoded with `-an`; game audio is a separate raw PCM file muxed in afterwards (see
@@ -446,9 +501,9 @@ That gives sample-exact A/V sync no matter how slowly the offline render runs. T
 from the 1.21.11 bytecode of `SoundEngine` and `SoundSystem`, not taken from ReplayMod.
 
 - `audio/LoopbackRenderer.start` sets a static `active` flag and calls `SoundManager.reloadSounds()`,
-  so vanilla tears the engine down and runs `SoundEngine.init` again. `close` clears the flag, deletes
-  the PCM file and reloads again, which puts the real device back; `ExportSession.end` runs it on
-  success, cancel and error alike.
+  so vanilla tears the engine down and runs `SoundEngine.init` again. `close` clears the flag, closes
+  the PCM file and reloads again, which puts the real device back; `ExportSession.restore` runs it on
+  success, cancel and error alike, and the PCM is deleted after the mux or on cancel and error.
 - `mixin/client/audio/SoundEngineMixin` wraps `openDeviceOrFallback` to return
   `alcLoopbackOpenDeviceSOFT(null)` while active, and replaces `createAttributes` with 48 kHz, stereo,
   `ALC_SHORT_SOFT`, HRTF as vanilla asked, output limiter on.
@@ -461,7 +516,7 @@ from the 1.21.11 bytecode of `SoundEngine` and `SoundSystem`, not taken from Rep
   total never drifts by more than one sample, and appends them to `momenton-audio-<name>.pcm`.
 - At a cut, `stopOneShots()` stops every non-repeating sound still playing, so nothing from before
   the cut is heard after it.
-- `FfmpegProcess.mux` then runs `ffmpeg -nostdin -y -i video -f s16le -ar 48000 -ac 2 -i pcm -c:v copy
+- `FfmpegProcess.mux`, on the finishing thread, then runs `ffmpeg -nostdin -y -i video -f s16le -ar 48000 -ac 2 -i pcm -c:v copy
   -c:a aac|libopus -b:a 192k -shortest output` (Opus for `.webm`) and appends its output to
   `export.log`. The temporary `momenton-video-*` and PCM files are deleted however the export ends.
 
@@ -627,11 +682,15 @@ something breaks.
   input part with `bgra` changed to `rgba`, extension, bitrate flag), plus a MP4 default-quality preset.
 - `export/FfmpegProcess`: `RenderSettings.findFFmpeg` (discovery order, Homebrew Cellar search) and
   `FFmpegWriter` (placeholder substitution, output folder as working directory, export.log tee,
-  `Output #0` startup check, `NoFFmpegException` / `FFmpegStartupException`, 30 s close then destroy).
+  `Output #0` startup check, `NoFFmpegException` / `FFmpegStartupException`; its fixed 30 s close then destroy was replaced by a progress watchdog).
   The quote-aware splitter replaces commons-exec `CommandLine.addArguments`.
 - `ui/ExportScreen`: `GuiRenderSettings` behaviour (preset resets the arguments and output
   extension, bitrate only for bitrate presets, editable command and arguments).
 - `ui/ExportFailedScreen`: `GuiExportFailed` (log in a scrolling list, back to the settings).
+- `ui/ExportProgressOverlay`, `export/ExportProgress`: `GuiVideoRenderer` (title, preview fitted
+  into the space above the stats, preview toggle, time taken on the left and time left on the right
+  above a frames done / total progress bar, remaining time from the average of the last 50 frames
+  ignoring the first). The preview is a GPU texture copy instead of ReplayMod's per-pixel CPU upload.
 
 ---
 
