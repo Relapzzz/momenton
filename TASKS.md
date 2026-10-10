@@ -25,6 +25,16 @@ Written but unobserved work goes in **Not yet verified**.
 
 ## Current state
 
+- **First in-game run (2026-10-10, user):** `runClient` launches with every mixin; on the new
+  build playback, seek and pause work. Observed broken and fixed since: ffmpeg "not found" after
+  `winget install ffmpeg` (a process started before the install keeps the old PATH; discovery now
+  also looks in winget's `Packages` folder, `60ef0d7`); replayed GUIs invisible in Edit mode (the
+  editor took the single screen slot; it now hosts the replayed screen under its panels, `e9de303`,
+  unverified). Found offline: a mic recording's `audio/mic.wav` was a STORED entry with a data
+  descriptor (zip filesystem rewrite), which `ZipInputStream` and the offline tools reject; it is now
+  written in the same zip pass with size and CRC (`4d582d2`). `2026-10-10_09-02-53.momenton` (made
+  before the fix) plays in game; a re-zipped copy passes every `checkReplay` check. The older two
+  recordings were deleted by the user.
 - Phases 0-2 (foundations, recording, playback with seeking) are complete and observed.
 - Waves 0-5 are merged on `main`. **Nothing from Waves 1-5 has been observed in game**; only JUnit.
   - Waves 1-3: tools on Gradle and the Wave 1 playback/recorder fixes; Phase 3 fidelity (local
@@ -114,6 +124,12 @@ following seeks and pause.
 
 ## Known issues
 
+- Mic recordings made before `4d582d2` fail the offline tools (`only DEFLATED entries can have EXT
+  descriptor`); the mod reads them. Re-zip to check them offline.
+- Other mods' HUDs export only if installed at record and export time and rebuildable from the
+  replayed world; Iris shader animation is driven by wall-clock time, so it runs at real-time speed
+  during a slow export (needs a compat hook, as ReplayMod has). Resource packs come from whatever is
+  enabled at export; neither the pack list nor the mod list is stored in the recording yet.
 - `defaultRequire = 1`: a mixin whose target moved is a startup crash after any Minecraft or Yarn bump.
 - Yarn names drift; verify against `genSources` or `javap` (`PlayerInventory.getSelectedSlot()` moved).
 - The first build on a clean machine (or clean Gradle cache) needs network for the `1.17-SNAPSHOT` Loom.
