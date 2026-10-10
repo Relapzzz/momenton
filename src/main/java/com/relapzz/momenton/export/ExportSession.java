@@ -8,6 +8,7 @@ import com.relapzz.momenton.format.ReplayReader;
 import com.relapzz.momenton.mixin.client.export.ChunkRenderingDataPreparerAccessor;
 import com.relapzz.momenton.mixin.client.export.ClientWorldAccessor;
 import com.relapzz.momenton.playback.ReplaySession;
+import com.relapzz.momenton.ui.ExportFailedScreen;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.client.gui.DrawContext;
@@ -83,7 +84,7 @@ public final class ExportSession {
 			return;
 		}
 		if (client.world != null && !ReplaySession.isPlaying()) {
-			showFailure(client, "Leave the world before exporting");
+			report(client, false, "Leave the world before exporting");
 			return;
 		}
 
@@ -92,7 +93,7 @@ public final class ExportSession {
 			metadata = reader.metadata();
 		} catch (IOException e) {
 			Momenton.LOGGER.error("Could not read {}", settings.replay(), e);
-			showFailure(client, "Could not read the replay");
+			report(client, false, "Could not read the replay");
 			return;
 		}
 
@@ -106,7 +107,7 @@ public final class ExportSession {
 			ffmpeg = FfmpegProcess.start(settings.ffmpegCommand(), settings.ffmpegArgs(), settings.width(), settings.height(), settings.fps(), settings.bitrate(), video);
 		} catch (IOException e) {
 			Momenton.LOGGER.error("Could not start FFmpeg", e);
-			showFailure(client, "Could not start FFmpeg: " + e.getMessage());
+			ExportFailedScreen.show(client, settings, e);
 			return;
 		}
 
@@ -117,7 +118,7 @@ public final class ExportSession {
 			ffmpeg.close();
 			delete(video);
 			Momenton.LOGGER.error("Could not create the audio file", e);
-			showFailure(client, "Could not create the audio file: " + e.getMessage());
+			report(client, false, "Could not create the audio file: " + e.getMessage());
 			return;
 		}
 
@@ -126,7 +127,7 @@ public final class ExportSession {
 			ffmpeg.close();
 			audio.close();
 			delete(video);
-			showFailure(client, "Could not open the replay");
+			report(client, false, "Could not open the replay");
 			return;
 		}
 
@@ -332,7 +333,7 @@ public final class ExportSession {
 		Momenton.LOGGER.error("Export failed", e);
 		String message = "Export failed: " + e.getMessage();
 		end(false, message);
-		showFailure(client, message);
+		ExportFailedScreen.show(client, settings, e);
 	}
 
 	private void end(boolean saved, String message) {
@@ -365,10 +366,6 @@ public final class ExportSession {
 		} catch (IOException e) {
 			Momenton.LOGGER.warn("Could not delete {}", path, e);
 		}
-	}
-
-	private static void showFailure(MinecraftClient client, String message) {
-		report(client, false, message);
 	}
 
 	private static void report(MinecraftClient client, boolean saved, String message) {

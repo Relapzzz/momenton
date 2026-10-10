@@ -14,8 +14,8 @@ import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.reflect.Field;
 import java.nio.file.Path;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 import java.util.zip.ZipEntry;
@@ -26,11 +26,8 @@ public final class MicPlayback {
 	private static final double TICKS_PER_SECOND = 20;
 	private static final double RESYNC_TICKS = 3;
 	private static final long PARK_NANOS = 10_000_000;
-	private static final Field ACTIVE = field(ReplaySession.class, "active");
-	private static final Field READER = field(ReplaySession.class, "reader");
-	private static final Field ZIP = field(ReplayReader.class, "zip");
 
-	private static ReplayReader playing;
+	private static Path playing;
 	private static MicPlayback player;
 
 	private final Path file;
@@ -50,13 +47,13 @@ public final class MicPlayback {
 	}
 
 	public static void onClientTick(MinecraftClient client) {
-		ReplayReader reader = ReplaySession.isPlaying() && !ExportSession.isExporting() ? reader() : null;
-		if (reader != playing) {
+		Path replay = ExportSession.isExporting() ? null : ReplaySession.file();
+		if (!Objects.equals(replay, playing)) {
 			if (player != null) {
 				player.running = false;
 			}
-			playing = reader;
-			player = reader == null ? null : open(reader);
+			playing = replay;
+			player = replay == null ? null : open(replay);
 		}
 		if (player != null) {
 			player.update(ReplaySession.currentTick(), ReplaySession.isPaused(), client.getRenderTickCounter().getTickProgress(false));
@@ -64,14 +61,20 @@ public final class MicPlayback {
 	}
 
 	@Nullable
-	private static MicPlayback open(ReplayReader reader) {
-		ReplayMetadata metadata = reader.metadata();
-		return metadata.micStartTick() == null ? null : new MicPlayback(path(reader), metadata.micStartTick(), metadata.micSampleRate());
+	private static MicPlayback open(Path replay) {
+		ReplayMetadata metadata;
+		try (ReplayReader reader = new ReplayReader(replay)) {
+			metadata = reader.metadata();
+		} catch (IOException e) {
+			Momenton.LOGGER.warn("Could not read the microphone track of {}", replay, e);
+			return null;
+		}
+		return metadata.micStartTick() == null ? null : new MicPlayback(replay, metadata.micStartTick(), metadata.micSampleRate());
 	}
 
 	private void update(int tick, boolean paused, float tickProgress) {
 		this.paused = paused;
-		long expected = Math.round((tick - 1 + tickProgress - startTick) * sampleRate / TICKS_PER_SECOND);
+		long expected = Math.round((tick + tickProgress - startTick) * sampleRate / TICKS_PER_SECOND);
 		boolean jumped = tick != lastTick && tick != lastTick + 1;
 		lastTick = tick;
 		Anchor at = anchor;
@@ -131,32 +134,6 @@ public final class MicPlayback {
 			}
 		} catch (LineUnavailableException | IOException | IllegalArgumentException e) {
 			Momenton.LOGGER.warn("Could not play the microphone track of {}", file, e);
-		}
-	}
-
-	private static ReplayReader reader() {
-		try {
-			return (ReplayReader) READER.get(ACTIVE.get(null));
-		} catch (IllegalAccessException e) {
-			throw new IllegalStateException(e);
-		}
-	}
-
-	private static Path path(ReplayReader reader) {
-		try {
-			return Path.of(((ZipFile) ZIP.get(reader)).getName());
-		} catch (IllegalAccessException e) {
-			throw new IllegalStateException(e);
-		}
-	}
-
-	private static Field field(Class<?> owner, String name) {
-		try {
-			Field field = owner.getDeclaredField(name);
-			field.setAccessible(true);
-			return field;
-		} catch (NoSuchFieldException e) {
-			throw new IllegalStateException(e);
 		}
 	}
 

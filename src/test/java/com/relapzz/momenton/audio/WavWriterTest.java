@@ -19,7 +19,6 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
@@ -92,10 +91,6 @@ class WavWriterTest {
 		}
 	}
 
-	@Test
-	void playbackFindsReplaySessionFields() {
-		assertDoesNotThrow(() -> Class.forName(MicPlayback.class.getName()));
-	}
 
 	private static byte[] pcm(int samples) {
 		ByteBuffer buffer = ByteBuffer.allocate(samples * 2).order(ByteOrder.LITTLE_ENDIAN);
