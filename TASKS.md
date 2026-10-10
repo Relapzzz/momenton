@@ -63,6 +63,13 @@ Written but unobserved work goes in **Not yet verified**.
   runs on 4 worker threads off the render thread with 4 readback buffers; the log splits `map`,
   `submit` and `copy ... MB/s`. If MB/s stays near 320 the split does not scale and GPU-side NV12
   conversion is next.
+- **Fifth run (2026-10-10, user): observed working.** Full 1080p60 Quick Sync export of
+  `2026-10-10_09-42-39` (7938 frames) in 142 s at 57 fps (was 32 fps), finished and saved 3.2 s
+  after the last frame; the video plays correctly and dying mobs no longer shake (the simulation
+  distance fix, observed). The 4-thread copy runs ~42 ms per frame at ~200 MB/s each, ~470 MB/s
+  aggregate, with ~100 readback stalls per 5%: reading the frame is still the limit. Next: GPU NV12
+  conversion (3.1 MB instead of 8.3 MB per frame). Wave 6 running: NV12 export, commentary track in
+  exports with volumes, recorded mod/resource-pack lists with mismatch warnings, mic settings screen.
 - **First in-game run (2026-10-10, user):** `runClient` launches with every mixin; on the new
   build playback, seek and pause work. Observed broken and fixed since: ffmpeg "not found" after
   `winget install ffmpeg` (a process started before the install keeps the old PATH; discovery now
