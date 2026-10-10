@@ -382,18 +382,31 @@ drawCursor)`, built by `ui/ExportScreen`.
    each grab is `copyTextureToBuffer` plus its own `createFence()`, mirroring vanilla's
    `MappableRingBuffer`, and a slot is mapped only when it comes round again (or at `flush`). Rows
    are flipped to top-down, as `ScreenshotRecorder` does.
-8. **Encode** (`FfmpegProcess`). FFmpeg from `-Dmomenton.ffmpeg`, then PATH, or the path typed in the
-   export screen. Raw RGBA on stdin from a writer thread through a queue bounded at three frames,
-   `libx264 -preset medium -crf 18 -pix_fmt yuv420p`; stderr is drained and its last 50 lines go into
-   any error.
+8. **Encode** (`FfmpegProcess`, `EncodingPreset`), ReplayMod's model. The export screen holds an
+   ffmpeg command and an argument template, both editable; picking a preset (MP4 default quality
+   `-preset medium -crf 18`, MP4 custom bitrate, MP4 potato, WebM custom bitrate, MKV lossless)
+   resets the template and the output extension. The command defaults to `-Dmomenton.ffmpeg`, then on
+   Windows `<gameDir>/ffmpeg/bin/ffmpeg.exe` or any `ffmpeg.exe` within four levels of the game
+   directory (skipping `saves`, `momenton`, `logs`, `assets` and the like), on macOS
+   `/usr/local/bin`, `/usr/bin` and the newest Homebrew Cellar build, else plain `ffmpeg` from PATH.
+   `%WIDTH% %HEIGHT% %FPS% %FILENAME% %BITRATE% %FILTERS%` are substituted (FILENAME is the bare
+   name, ffmpeg runs in the output folder, BITRATE is bits per second, FILTERS is empty), and the
+   string is split on whitespace with double quotes grouping. Raw RGBA goes to stdin from a writer
+   thread through a queue bounded at three frames; stdout and stderr are merged and teed to
+   `<gameDir>/momenton/export.log` (first line `> ` plus the command) and memory. A process that
+   cannot be launched is `NotFoundException`; a failure before the log shows an `Output #0` line is
+   `StartupException` (rejected arguments), any later failure `FfmpegException`; both carry the log.
+   `finish` closes stdin, waits 30 s, then destroys. `ExportFailedScreen.show` explains the failure
+   with the log. The mux picks AAC for mp4/mkv and libopus for webm and appends to the same log.
+   Session memory only: the screen remembers the last preset, command, arguments and bitrate.
 9. **Around the frame.** Vsync off and the inactivity fps limit lifted; the pause menu never opens on
    focus loss; toasts are not drawn; keyboard input is cancelled except Esc, which cancels the export;
    the cursor sprite `textures/gui/cursor.png` is drawn after the screen when enabled. At the end the
    replay is left paused on the last frame and a toast reports the result.
 
 ```
-ffmpeg -y -f rawvideo -pix_fmt rgba -s WxH -r <fps> -i pipe:0 \
-       -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p out.mp4
+ffmpeg -y -f rawvideo -pix_fmt rgba -s %WIDTH%x%HEIGHT% -r %FPS% -i - %FILTERS%-an \
+       -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p "%FILENAME%"
 ```
 
 Game audio and the mic join this command as extra inputs in Phases 5 and 7. No frame composition
@@ -548,6 +561,15 @@ something breaks.
 - `export/ExportSession` chunk wait: the idea of ReplayMod's `Mixin_BlockOnChunkRebuilds` (do not
   grab a frame until chunk rebuilds are done). The idea only; no code was copied, and the conditions
   are 1.21.11's own (see Export, step 4).
+- `export/EncodingPreset`: `RenderSettings.EncodingPreset` (the preset argument strings, the common
+  input part with `bgra` changed to `rgba`, extension, bitrate flag), plus a MP4 default-quality preset.
+- `export/FfmpegProcess`: `RenderSettings.findFFmpeg` (discovery order, Homebrew Cellar search) and
+  `FFmpegWriter` (placeholder substitution, output folder as working directory, export.log tee,
+  `Output #0` startup check, `NoFFmpegException` / `FFmpegStartupException`, 30 s close then destroy).
+  The quote-aware splitter replaces commons-exec `CommandLine.addArguments`.
+- `ui/ExportScreen`: `GuiRenderSettings` behaviour (preset resets the arguments and output
+  extension, bitrate only for bitrate presets, editable command and arguments).
+- `ui/ExportFailedScreen`: `GuiExportFailed` (log in a scrolling list, back to the settings).
 
 ---
 
