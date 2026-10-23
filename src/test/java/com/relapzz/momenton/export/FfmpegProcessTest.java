@@ -55,7 +55,7 @@ class FfmpegProcessTest {
 			for (EncodingPreset preset : EncodingPreset.values()) {
 				List<String> args = FfmpegProcess.split(FfmpegProcess.substitute(format.expand(preset.arguments()), 1920, 1080, 60, 8_000_000, "my clip." + preset.extension()));
 				List<String> input = format == FrameFormat.BGRA_TOP_DOWN ? BGRA_INPUT
-						: format == FrameFormat.NV12 && preset != EncodingPreset.MKV_LOSSLESS ? NV12_INPUT : RGBA_INPUT;
+						: (format == FrameFormat.NV12 || format.converts()) && preset != EncodingPreset.MKV_LOSSLESS ? NV12_INPUT : RGBA_INPUT;
 				assertEquals(input, args.subList(0, input.size()), format + " " + preset);
 				assertEquals("-an", args.get(input.size()), format + " " + preset);
 				assertEquals("my clip." + preset.extension(), args.getLast(), format + " " + preset);
@@ -71,6 +71,9 @@ class FfmpegProcessTest {
 		assertEquals(1920 * 1080 * 3 / 2, FrameFormat.NV12.bytes(1920, 1080));
 		assertEquals(1920 * 1080 * 4, FrameFormat.RGBA_TOP_DOWN.bytes(1920, 1080));
 		assertEquals(1920 * 1080 * 4, FrameFormat.BGRA_TOP_DOWN.bytes(1920, 1080));
+		assertEquals(1920 * 1080 * 4, FrameFormat.NV12_FROM_BGRA.bytes(1920, 1080));
+		assertEquals(1920 * 1080 * 3 / 2, FrameFormat.NV12_FROM_BGRA.outputBytes(1920, 1080));
+		assertEquals(1920 * 1080 * 4, FrameFormat.RGBA.outputBytes(1920, 1080));
 	}
 
 	@Test

@@ -14,6 +14,7 @@ import com.relapzz.momenton.ui.ExportProgressOverlay;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.world.LevelLoadingScreen;
 import net.minecraft.client.render.RenderTickCounter;
 import net.minecraft.client.render.WorldRenderer;
@@ -36,11 +37,15 @@ import java.util.concurrent.Future;
 public final class ExportSession {
 	private static final Identifier CURSOR = Momenton.id("textures/gui/cursor.png");
 	private static final int CHUNK_WAIT_LIMIT = 600;
+	private static final int PREVIEW_INTERVAL = 4;
 
 	private static ExportSession active;
 
 	private final MinecraftClient client;
 	private final ExportSettings settings;
+	private final Screen parent;
+	private final boolean openedReplay;
+	private final boolean bgra;
 	private final FfmpegProcess ffmpeg;
 	private final Path video;
 	private final LoopbackRenderer audio;
@@ -66,10 +71,13 @@ public final class ExportSession {
 	private RenderTickCounter counter;
 	private IOException failure;
 
-	private ExportSession(MinecraftClient client, ExportSettings settings, ReplayMetadata metadata, int frames, FrameFormat format,
-			FfmpegProcess ffmpeg, Path video, LoopbackRenderer audio) {
+	private ExportSession(MinecraftClient client, ExportSettings settings, Screen parent, boolean openedReplay, ReplayMetadata metadata, int frames,
+			FrameFormat format, FfmpegProcess ffmpeg, Path video, LoopbackRenderer audio) {
 		this.client = client;
 		this.settings = settings;
+		this.parent = parent;
+		this.openedReplay = openedReplay;
+		this.bgra = format == FrameFormat.BGRA_TOP_DOWN || format == FrameFormat.NV12_FROM_BGRA;
 		this.ffmpeg = ffmpeg;
 		this.video = video;
 		this.audio = audio;
@@ -90,7 +98,7 @@ public final class ExportSession {
 		return active != null && active.settings.drawCursor();
 	}
 
-	public static void start(MinecraftClient client, ExportSettings settings) {
+	public static void start(MinecraftClient client, ExportSettings settings, Screen parent) {
 		if (active != null) {
 			return;
 		}
@@ -136,6 +144,7 @@ public final class ExportSession {
 			return;
 		}
 
+		boolean openedReplay = !ReplaySession.isPlaying();
 		ReplaySession.open(client, settings.replay());
 		if (!ReplaySession.isPlaying() || client.player == null) {
 			audio.close();
@@ -144,7 +153,7 @@ public final class ExportSession {
 			return;
 		}
 
-		active = new ExportSession(client, settings, metadata, frames, format, ffmpeg, video, audio);
+		active = new ExportSession(client, settings, parent, openedReplay, metadata, frames, format, ffmpeg, video, audio);
 		active.settle();
 		Window window = client.getWindow();
 		window.setVsync(false);
@@ -369,6 +378,9 @@ public final class ExportSession {
 		if (failure != null) {
 			return CompletableFuture.completedFuture(null);
 		}
+		if (VulkanMod.LOADED && delivered % PREVIEW_INTERVAL == 0) {
+			overlay.capture(frame, bgra);
+		}
 		long start = System.nanoTime();
 		long waitedBefore = ffmpeg.waitedNanos();
 		try {
@@ -392,7 +404,14 @@ public final class ExportSession {
 		}
 		ExportFinisher finisher = ExportFinisher.start(settings, ffmpeg, video, audio.path(), frames);
 		restore("rendered, finishing in the background");
-		client.setScreen(new ExportFinishingScreen(client.currentScreen, finisher));
+		if (!openedReplay) {
+			client.setScreen(new ExportFinishingScreen(client.currentScreen, finisher));
+			return;
+		}
+		client.send(() -> {
+			ReplaySession.stop();
+			client.setScreen(new ExportFinishingScreen(parent, finisher));
+		});
 	}
 
 	private void abort() {
