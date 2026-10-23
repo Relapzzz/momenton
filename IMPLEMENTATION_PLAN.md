@@ -457,8 +457,8 @@ clock and the mic sync all read it the same way.
    `V = 128 + 224 (R - Y') / 1.5748`, rounded by the unorm store. Chroma copies what ffmpeg's
    swscale does for rgba to nv12 (measured with single-pixel impulses): a plain average of the two
    pixels horizontally and a vertical 2:1 bicubic (B 0, C 0.6, eight taps
-   `-0.0140625 -0.0421875 0.1203125 0.4359375` mirrored, edge rows clamped). `Nv12ShaderTest` runs a
-   Java transliteration of the shader against ffmpeg's own conversion of the same RGBA frame (the RGBA
+   `-0.0140625 -0.0421875 0.1203125 0.4359375` mirrored, edge rows clamped). `Nv12ConverterTest` runs
+   `export/Nv12Converter` (the same math in integer fixed point, used on the CPU under VulkanMod) against ffmpeg's own conversion of the same RGBA frame (the RGBA
    fallback path): every sample within 1, Y about 69 dB, U and V 67 to 75 dB, 98.8 to 100% exact, and
    the same on real 1080p screenshots. NV12 is used when the arguments contain `%INPUT%`, width is a
    multiple of 4, height is even, and `GpuDevice.precompilePipeline` reports the pipeline valid;
@@ -685,11 +685,17 @@ the frame (wrong old layouts: `VK_ERROR_DEVICE_LOST` on Intel, seen in game); an
 `copyTextureToBuffer` runs in its own one-shot submit before the frame's draws. So `export/VulkanMod`
 (reflection only, no compile dependency) does what VulkanMod's own `ScreenshotUtil` does: call
 `Renderer.flushCmds()` before the copy, then reset `Renderer.boundPipelineHandle` (the flush opens a
-fresh command buffer without clearing that cache). Export there never uses NV12; it reads RGBA or BGRA
-(swapchain format 44) top-down with no CPU flip, at the window size rounded down to even (VulkanMod
-ignores the panorama-style resize; the export screen shows the size, not editable), skips the preview
-capture (`copyTextureToTexture` is a no-op), and judges terrain with VulkanMod's own
-`graphNeedsUpdate` and task dispatcher, since it replaces vanilla terrain setup.
+fresh command buffer without clearing that cache). `ImageUtil.copyImageToBuffer` takes a command
+buffer from the graphics pool and never returns it (one buffer, fence and semaphore leaked per call;
+the Intel driver crashed in `vkCmdCopyImageToBuffer` after about 8200 frames), so Momenton reads the
+pool's next buffer before the copy and calls its `reset()` after (Wave 11). It reads RGBA or BGRA
+(swapchain format 44) top-down, at the window size rounded down to even (VulkanMod ignores the
+panorama-style resize; the export screen shows the size, not editable), and converts to NV12 on the
+copy threads (`Nv12Converter`, a frame split across 4 threads, ~3.5 ms wall per 1080p frame;
+ffmpeg measured 142 fps on RGBA input against 224 fps on NV12); MKV lossless stays RGBA. The preview
+is built from the CPU frame every 4th frame (`copyTextureToTexture` is a no-op there). Hardware
+encoders are not offered (Quick Sync lost the device in 2 of 2 tries, cause unproven). Terrain is
+judged with VulkanMod's own `graphNeedsUpdate` and task dispatcher.
 
 VulkanMod (0.6.3 supports 1.21.11, LGPL-3.0) replaces Minecraft's GL backend. Any mod making direct
 OpenGL calls is guaranteed broken under it. Minecraft 1.21.6+ introduced the `GpuDevice` /

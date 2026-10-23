@@ -57,10 +57,10 @@ Written but unobserved work goes in **Not yet verified**.
 ## Current state
 
 - Phases 0-2 complete and observed. Phases 3-7 written; much of it observed in five in-game runs on
-  2026-10-10 (see below). Waves 0-10 merged on `main`.
-- Last build (2026-10-10, after Wave 10): `./gradlew build --offline --rerun-tasks` green, 94 tests,
-  0 skipped, 0 failed; `checkReplay` ALL PASS on `2026-10-10_09-42-39` and on the user's server
-  recording `2026-10-10_20-21-31` (mcpvp); 47 client mixins; no OpenGL imports. Worktrees removed.
+  2026-10-10 (see below). Waves 0-11 merged on `main`.
+- Last build (2026-10-23, after Wave 11): `./gradlew build --offline --rerun-tasks` green, 95 tests,
+  0 skipped, 0 failed; `checkReplay` ALL PASS on `2026-10-10_09-42-39` and on the user's 3-minute
+  recording `2026-10-23_18-21-58`; 48 client mixins; no OpenGL imports. Worktrees removed.
 - The user's eighth-run recordings `2026-10-10_18-28-04` and `_18-30-32` (profile below; copies in
   `%TEMP%/mrec`) pass everything except the new command-tree check, which they predate.
 - The user tests in their own Modrinth profile (VulkanMod, HeroBot, PvP client mods):
@@ -77,6 +77,25 @@ Written but unobserved work goes in **Not yet verified**.
   back; mic track; the main test file) and `2026-10-10_09-02-53.momenton` (1596 ticks; Nether at
   1142 and back at 1482; its mic entry predates `4d582d2`, so the offline tools reject it - re-zip a
   copy to check it). Exports land in `run/momenton/exports/`.
+
+### Wave 11 (merged, unverified): long VulkanMod exports, speed, exits, cleanup
+
+Tenth run (2026-10-23, user's profile, VulkanMod): MP4 x264 export worked (real time, ~60 fps at
+1080p60: render ~14 ms, ffmpeg wait 3-5 ms per frame); MKV lossless worked (4.25 GB for 64 s, which is
+what lossless 1080p60 costs); MP4 Quick Sync lost the device again at the first frame. A 3-minute
+export died at frame 8245 of 12081 with a native access violation in `igvk64.dll` inside VulkanMod's
+`ImageUtil.copyImageToBuffer` (`hs_err_pid15244.log`); its temporaries stayed in `exports/`. After an
+export the user was left in the replay; Disconnect landed on the Multiplayer screen; no preview.
+
+- `ab1f81a`: return the readback command buffer to VulkanMod's pool (leak, root cause of the crash);
+  NV12 on the copy threads under VulkanMod (`Nv12Converter`, test `Nv12ConverterTest` replaces
+  `Nv12ShaderTest`); preview from the CPU frame; hardware encoders hidden under VulkanMod; an export
+  that opened its replay closes it and shows the finishing screen over the browser.
+- `054d116`: `MinecraftClient.disconnect(Text)` picks the Multiplayer screen for anything not
+  singleplayer; while a replay plays it now opens the replay browser; `ReplaySession.stop` lands
+  there too. `ExportTemporaries` deletes `momenton-video-*`, `momenton-audio-*.pcm`,
+  `momenton-mic-*.pcm` in `exports/` at startup.
+- `1d8f4ff`: cancel or failure of an export that opened its replay also returns to the browser.
 
 ### Wave 10 (merged, unverified): export under VulkanMod
 
@@ -264,9 +283,12 @@ in `2026-10-10_09-42-39`): the tab list arrived before F9 and was never in a sna
   client-only block (fake anchor) or any modded block fails to decode that chunk without the mod.
 - The first snapshot at F9 still costs a full build (35-55 ms measured); the per-packet re-encode on
   the netty thread is unmeasured.
-- Under VulkanMod an export is window-sized, RGBA through ffmpeg (no NV12), with a GPU sync per frame
-  (slower), no preview in the overlay; a different VulkanMod version may rename the reflected members
-  (export then fails with an IllegalStateException).
+- Under VulkanMod an export is window-sized, with a GPU sync per frame and NV12 converted on the CPU
+  (~8 ms CPU per frame on 4 threads); no hardware encoders (Quick Sync lost the device twice, cause
+  unproven); a different VulkanMod version may rename the reflected members (export then fails with
+  an IllegalStateException).
+- Export speed is bounded by the frame render (~14 ms at 1080p on Iris Xe with VulkanMod): about real
+  time for 1080p60 on this machine.
 - A title showing at a snapshot is not restored after a seek (titles are cleared, not re-sent).
 - A cooldown running at a snapshot restarts its sweep from full (the packet has no start tick); a boss
   bar mid-animation is captured up to 100 ms behind.
@@ -358,18 +380,19 @@ Complete, observed.
 
 ## Next session
 
-The user runs the remaining Wave 9 checks after the VulkanMod export is confirmed. Copy
-`build/libs/momenton-1.0.0.jar` into the profile's `mods/`; the coordinator reads the profile's
-`logs/latest.log`, `crash-reports/`, `momenton/export.log` and `momenton/recordings/` directly.
+Copy `build/libs/momenton-1.0.0.jar` into the user's profile `mods/`. The coordinator reads the
+profile's `logs/latest.log`, `crash-reports/`, `hs_err_pid*.log`, `momenton/export.log` and
+`momenton/recordings/` directly.
 
-1. **VulkanMod export:** export the mcpvp recording `2026-10-10_20-21-31` (MP4 default preset). The
-   screen shows "Window size (VulkanMod)" greyed; the log says `as BGRA_TOP_DOWN` or `RGBA_TOP_DOWN`;
-   no crash; no repeated "Terrain still building" warnings; the overlay shows progress. The MP4 is
-   upright, colours right, HUD present, first frame matches the replay, chunks complete. Note the
-   total time.
-2. One MKV lossless export (colours right).
-3. Then the Wave 9 list: commands not red, the practice map's pack in the replay, seek after
-   placing blocks and a torch, FOV/sprint/zoom, prediction on a server (blocks, crystals, anchors), no
-   dismount prompt, server UI after a seek, BetterHitreg hit sound once or twice.
-
-Then: BetterHitreg rule, ok_zoomer HUD hiding, anything the export shows.
+1. Start the game: no mixin error (48 client mixins); the log shows "Deleted ... left by an
+   interrupted export" for the two files of the crashed export.
+2. **Long export under VulkanMod:** export the 3-minute `2026-10-23_18-21-58` as MP4 (x264). No crash
+   past frame 8245; the preview shows the picture during export; compare the `Export N%` lines with
+   the last run (fps, `ffmpeg wait`); the MP4 colours look right.
+3. Export from the replay browser: the finishing screen sits over the browser and returns to it;
+   Esc mid-export also returns to the browser.
+4. In a replay, Esc then Disconnect: lands on the replay browser. On a real server, Disconnect still
+   lands on Multiplayer.
+5. MKV lossless still works; the export screen shows no Quick Sync under VulkanMod (tooltip says why).
+6. Then the Wave 9 checks: commands not red, practice map pack, seek after blocks and a torch,
+   FOV/sprint/zoom, prediction on a server, no dismount prompt, server UI after a seek, BetterHitreg.
