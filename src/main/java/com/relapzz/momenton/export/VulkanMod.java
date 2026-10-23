@@ -25,6 +25,27 @@ public final class VulkanMod {
 		}
 	}
 
+	static Object nextCommandBuffer() {
+		try {
+			Object pool = (Object) Handles.GRAPHICS_POOL.invokeExact();
+			Queue<?> available = (Queue<?>) Handles.AVAILABLE.invokeExact(pool);
+			if (available.isEmpty()) {
+				Handles.RESET.invokeExact((Object) Handles.TAKE.invokeExact(pool));
+			}
+			return available.peek();
+		} catch (Throwable e) {
+			throw new IllegalStateException(e);
+		}
+	}
+
+	static void release(Object commandBuffer) {
+		try {
+			Handles.RESET.invokeExact(commandBuffer);
+		} catch (Throwable e) {
+			throw new IllegalStateException(e);
+		}
+	}
+
 	static boolean bgra(GpuTexture texture) {
 		try {
 			return (int) Handles.FORMAT.invokeExact(texture) == B8G8R8A8_UNORM;
@@ -55,10 +76,24 @@ public final class VulkanMod {
 		static final MethodHandle IDLE;
 		static final MethodHandle HIGH_PRIORITY;
 		static final MethodHandle LOW_PRIORITY;
+		static final MethodHandle GRAPHICS_POOL;
+		static final MethodHandle AVAILABLE;
+		static final MethodHandle TAKE;
+		static final MethodHandle RESET;
 
 		static {
 			try {
 				MethodHandles.Lookup lookup = MethodHandles.lookup();
+				Class<?> devices = Class.forName("net.vulkanmod.vulkan.device.DeviceManager");
+				Class<?> graphicsQueue = Class.forName("net.vulkanmod.vulkan.queue.GraphicsQueue");
+				Class<?> pool = Class.forName("net.vulkanmod.vulkan.queue.CommandPool");
+				Class<?> commandBuffer = Class.forName("net.vulkanmod.vulkan.queue.CommandPool$CommandBuffer");
+				GRAPHICS_POOL = MethodHandles.filterReturnValue(lookup.findStatic(devices, "getGraphicsQueue", MethodType.methodType(graphicsQueue)),
+						lookup.findVirtual(graphicsQueue, "getCommandPool", MethodType.methodType(pool))).asType(MethodType.methodType(Object.class));
+				AVAILABLE = MethodHandles.privateLookupIn(pool, lookup).findGetter(pool, "availableCmdBuffers", Queue.class)
+						.asType(MethodType.methodType(Queue.class, Object.class));
+				TAKE = lookup.findVirtual(pool, "getCommandBuffer", MethodType.methodType(commandBuffer)).asType(MethodType.methodType(Object.class, Object.class));
+				RESET = lookup.findVirtual(commandBuffer, "reset", MethodType.methodType(void.class)).asType(MethodType.methodType(void.class, Object.class));
 				Class<?> renderer = Class.forName("net.vulkanmod.vulkan.Renderer");
 				Class<?> texture = Class.forName("net.vulkanmod.render.engine.VkGpuTexture");
 				Class<?> image = Class.forName("net.vulkanmod.vulkan.texture.VulkanImage");

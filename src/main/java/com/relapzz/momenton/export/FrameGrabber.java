@@ -70,7 +70,11 @@ final class FrameGrabber implements AutoCloseable {
 
 	static FrameFormat format(String args, int width, int height) {
 		if (VulkanMod.LOADED) {
-			return VulkanMod.bgra(MinecraftClient.getInstance().getFramebuffer().getColorAttachment()) ? FrameFormat.BGRA_TOP_DOWN : FrameFormat.RGBA_TOP_DOWN;
+			boolean bgra = VulkanMod.bgra(MinecraftClient.getInstance().getFramebuffer().getColorAttachment());
+			if (!args.contains(FrameFormat.PLACEHOLDER)) {
+				return bgra ? FrameFormat.BGRA_TOP_DOWN : FrameFormat.RGBA_TOP_DOWN;
+			}
+			return bgra ? FrameFormat.NV12_FROM_BGRA : FrameFormat.NV12_FROM_RGBA;
 		}
 		if (!args.contains(FrameFormat.PLACEHOLDER) || width % 4 != 0 || height % 2 != 0) {
 			return FrameFormat.RGBA;
@@ -111,6 +115,10 @@ final class FrameGrabber implements AutoCloseable {
 		}
 		if (VulkanMod.LOADED) {
 			VulkanMod.flush();
+			Object commands = VulkanMod.nextCommandBuffer();
+			encoder.copyTextureToBuffer(source, buffer, 0, () -> deliver(buffer, sink), 0, 0, 0, width, height);
+			VulkanMod.release(commands);
+			return true;
 		}
 		encoder.copyTextureToBuffer(source, buffer, 0, () -> deliver(buffer, sink), 0, 0, 0, width, height);
 		return true;

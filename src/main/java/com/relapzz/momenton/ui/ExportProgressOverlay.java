@@ -14,11 +14,15 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.render.state.GuiRenderState;
 import net.minecraft.client.render.fog.FogRenderer;
 import net.minecraft.client.texture.AbstractTexture;
+import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.util.Window;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import org.lwjgl.glfw.GLFW;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.IntBuffer;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
@@ -27,6 +31,7 @@ public final class ExportProgressOverlay implements AutoCloseable {
 	private static final int BACKGROUND = 0xFF202020;
 	private static final int GREY = 0xFFA0A0A0;
 	private static final int WHITE = 0xFFFFFFFF;
+	private static final int PREVIEW_STEP = 3;
 
 	private final MinecraftClient client;
 	private final int width;
@@ -36,6 +41,7 @@ public final class ExportProgressOverlay implements AutoCloseable {
 	private boolean preview = true;
 	private boolean captured;
 	private PreviewTexture texture;
+	private NativeImage image;
 
 	public ExportProgressOverlay(MinecraftClient client, int width, int height) {
 		this.client = client;
@@ -59,6 +65,27 @@ public final class ExportProgressOverlay implements AutoCloseable {
 		captured = true;
 	}
 
+	public void capture(ByteBuffer frame, boolean bgra) {
+		if (!preview) {
+			return;
+		}
+		if (image == null) {
+			image = new NativeImage(width / PREVIEW_STEP, height / PREVIEW_STEP, false);
+			texture = new PreviewTexture(image.getWidth(), image.getHeight());
+			client.getTextureManager().registerTexture(PREVIEW, texture);
+		}
+		IntBuffer pixels = frame.duplicate().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
+		for (int y = 0; y < image.getHeight(); y++) {
+			int row = y * PREVIEW_STEP * width;
+			for (int x = 0; x < image.getWidth(); x++) {
+				int pixel = pixels.get(row + x * PREVIEW_STEP);
+				image.setColor(x, image.getHeight() - 1 - y, 0xFF000000 | (bgra ? pixel & 0xFF00 | pixel >> 16 & 0xFF | (pixel & 0xFF) << 16 : pixel));
+			}
+		}
+		RenderSystem.getDevice().createCommandEncoder().writeToTexture(texture.getGlTexture(), image);
+		captured = true;
+	}
+
 	public void draw(ExportProgress progress) {
 		ExportGameRendererAccessor renderer = (ExportGameRendererAccessor) client.gameRenderer;
 		GuiRenderState state = renderer.momenton$guiState();
@@ -72,6 +99,9 @@ public final class ExportProgressOverlay implements AutoCloseable {
 	public void close() {
 		if (texture != null) {
 			client.getTextureManager().destroyTexture(PREVIEW);
+		}
+		if (image != null) {
+			image.close();
 		}
 	}
 

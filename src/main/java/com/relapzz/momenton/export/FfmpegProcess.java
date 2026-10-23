@@ -56,6 +56,8 @@ public final class FfmpegProcess implements AutoCloseable {
 	private final Process process;
 	private final FrameFormat format;
 	private final int frameBytes;
+	private final int width;
+	private final int height;
 	private final int stride;
 	private final int rows;
 	private final BufferedWriter logFile;
@@ -74,12 +76,14 @@ public final class FfmpegProcess implements AutoCloseable {
 		this.process = process;
 		this.format = format;
 		this.frameBytes = format.bytes(width, height);
+		this.width = width;
+		this.height = height;
 		this.stride = format.stride(width);
 		this.rows = format.rows(height);
 		this.logFile = logFile;
 		log.append(header);
 		for (int i = 0; i < QUEUED_FRAMES; i++) {
-			free.add(new byte[frameBytes]);
+			free.add(new byte[format.outputBytes(width, height)]);
 		}
 		writer = Thread.ofPlatform().name("Momenton ffmpeg writer").daemon().start(this::writeLoop);
 		reader = Thread.ofPlatform().name("Momenton ffmpeg log").daemon().start(this::readLoop);
@@ -336,9 +340,8 @@ public final class FfmpegProcess implements AutoCloseable {
 			waited += System.nanoTime() - start;
 			CompletableFuture<?>[] parts = new CompletableFuture<?>[COPY_THREADS];
 			for (int i = 0; i < COPY_THREADS; i++) {
-				int from = rows * i / COPY_THREADS;
-				int to = rows * (i + 1) / COPY_THREADS;
-				parts[i] = CompletableFuture.runAsync(() -> copy(source, frame, from, to), copiers);
+				int part = i;
+				parts[i] = CompletableFuture.runAsync(() -> copy(source, frame, part), copiers);
 			}
 			CompletableFuture<Void> copied = CompletableFuture.allOf(parts);
 			queued.put(new Frame(frame, copied));
@@ -349,7 +352,14 @@ public final class FfmpegProcess implements AutoCloseable {
 		}
 	}
 
-	private void copy(ByteBuffer source, byte[] frame, int from, int to) {
+	private void copy(ByteBuffer source, byte[] frame, int part) {
+		if (format.converts()) {
+			Nv12Converter.convert(source, frame, width, height, format == FrameFormat.NV12_FROM_BGRA,
+					height / 2 * part / COPY_THREADS, height / 2 * (part + 1) / COPY_THREADS);
+			return;
+		}
+		int from = rows * part / COPY_THREADS;
+		int to = rows * (part + 1) / COPY_THREADS;
 		int base = source.position();
 		if (!format.bottomUp()) {
 			source.get(base + from * stride, frame, from * stride, (to - from) * stride);

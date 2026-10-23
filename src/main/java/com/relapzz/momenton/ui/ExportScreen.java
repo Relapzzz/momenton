@@ -13,6 +13,7 @@ import com.relapzz.momenton.format.ReplayReader;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.tooltip.Tooltip;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.CyclingButtonWidget;
 import net.minecraft.client.gui.widget.SliderWidget;
@@ -26,6 +27,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -47,7 +49,7 @@ public class ExportScreen extends Screen {
 	private final String commandDefault;
 	private final boolean hasMic;
 	private final List<Text> labels = new ArrayList<>();
-	private final List<EncodingPreset> presets = EncodingPreset.available(EncoderProbe.working());
+	private final List<EncodingPreset> presets = EncodingPreset.available(VulkanMod.LOADED ? Set.of() : EncoderProbe.working());
 	private EncodingPreset preset = lastPreset != null && presets.contains(lastPreset) ? lastPreset : presets.getFirst();
 
 	private TextFieldWidget widthField;
@@ -112,6 +114,8 @@ public class ExportScreen extends Screen {
 		}
 		addDrawableChild(CyclingButtonWidget.builder(ExportScreen::presetText, preset)
 				.values(presets)
+				.tooltip(value -> VulkanMod.LOADED && !EncoderProbe.working().isEmpty() ? Tooltip.of(Text.translatableWithFallback(
+						"screen.momenton.export.format.vulkanmod", "Hardware encoders are off under VulkanMod: they crashed the GPU in testing")) : null)
 				.omitKeyText()
 				.build(left, row(labels.size()), 200, 20, Text.translatable("screen.momenton.export.format"), (button, value) -> changePreset(value)));
 		label("screen.momenton.export.format");
@@ -273,7 +277,7 @@ public class ExportScreen extends Screen {
 		message = Text.empty();
 		client.setScreen(null);
 		ExportSession.start(client, new ExportSettings(replay, exported, w, h, fps, output, command, args, bitrate, cursor.getValue(),
-				lastGameVolume, hasMic ? lastMicVolume : 0.0f));
+				lastGameVolume, hasMic ? lastMicVolume : 0.0f), parent);
 	}
 
 	private void fail(String key) {
