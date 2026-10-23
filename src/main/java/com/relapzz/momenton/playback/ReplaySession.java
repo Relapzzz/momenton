@@ -4,6 +4,7 @@ import com.relapzz.momenton.Momenton;
 import com.relapzz.momenton.format.ActionCodec;
 import com.relapzz.momenton.format.ReplayMetadata;
 import com.relapzz.momenton.format.ReplayReader;
+import com.relapzz.momenton.ui.ReplayBrowserScreen;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.option.Perspective;
@@ -221,7 +222,7 @@ public final class ReplaySession {
 		// the viewer disconnected and vanilla is already inside its own teardown; disconnecting again
 		// from in there re-enters it.
 		if (session.connection.isOpen() && session.client.world != null) {
-			session.client.disconnect(new TitleScreen(), false);
+			session.client.disconnect(new ReplayBrowserScreen(new TitleScreen()), false);
 		}
 		session.connection.close();
 		close(session.reader);
