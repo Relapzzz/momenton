@@ -19,6 +19,7 @@ import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 public class MomentonClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
+		ExportTemporaries.deleteOrphans();
 		MomentonKeybinds.register();
 		TitleScreenEntry.register();
 		ReplayScreenInput.register();

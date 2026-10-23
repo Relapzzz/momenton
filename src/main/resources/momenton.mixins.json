@@ -51,6 +51,7 @@
 		"client.playback.HostedChatFocusMixin",
 		"client.playback.MinecraftClientMixin",
 		"client.playback.MouseMixin",
+		"client.playback.ReplayExitScreenMixin",
 		"client.playback.ScreenCursorMixin"
 	],
 	"injectors": {
