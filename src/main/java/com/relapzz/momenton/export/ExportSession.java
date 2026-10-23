@@ -404,25 +404,36 @@ public final class ExportSession {
 		}
 		ExportFinisher finisher = ExportFinisher.start(settings, ffmpeg, video, audio.path(), frames);
 		restore("rendered, finishing in the background");
-		if (!openedReplay) {
-			client.setScreen(new ExportFinishingScreen(client.currentScreen, finisher));
-			return;
-		}
-		client.send(() -> {
-			ReplaySession.stop();
-			client.setScreen(new ExportFinishingScreen(parent, finisher));
-		});
+		leave(() -> client.setScreen(new ExportFinishingScreen(openedReplay ? parent : client.currentScreen, finisher)));
 	}
 
 	private void abort() {
-		restore("cancelled");
-		ffmpeg.discard(video, audio.path());
+		discard("cancelled");
+		if (openedReplay) {
+			leave(() -> client.setScreen(parent));
+		}
 	}
 
 	private void fail(IOException e) {
 		Momenton.LOGGER.error("Export failed", e);
-		abort();
-		ExportFailedScreen.show(client, settings, e);
+		discard("failed");
+		leave(() -> ExportFailedScreen.show(client, settings, e));
+	}
+
+	private void discard(String outcome) {
+		restore(outcome);
+		ffmpeg.discard(video, audio.path());
+	}
+
+	private void leave(Runnable then) {
+		if (!openedReplay) {
+			then.run();
+			return;
+		}
+		client.send(() -> {
+			ReplaySession.stop();
+			then.run();
+		});
 	}
 
 	private void restore(String outcome) {
