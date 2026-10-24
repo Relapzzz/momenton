@@ -7,7 +7,7 @@
 	"authors": [
 		"relapzz"
 	],
-	"license": "CC0-1.0",
+	"license": "GPL-3.0-only",
 	"icon": "assets/momenton/icon.png",
 	"environment": "*",
 	"entrypoints": {

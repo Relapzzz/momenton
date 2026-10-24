@@ -809,12 +809,13 @@ mappings bump.
 
 ## Source reuse: what we borrow, and from where
 
-This mod is private and will not be distributed, which widens what is usable - but not without limit.
+Momenton is public under GPL-3.0-only, which is what makes borrowing from ReplayMod (GPLv3) legal: any
+distributed derivative of GPL code must itself be GPL. That still does not make every source usable.
 Do not reinvent anything on this list.
 
 | Source | Licence | What to take |
 |---|---|---|
-| **ReplayMod** (github.com/ReplayMod/ReplayMod) | GPLv3 | The primary reference to lift from. Packet recording and filtering, replay playback over a fake connection, seeking, and its ffmpeg export settings. GPL obligations attach to distribution, so a private mod can borrow freely. |
+| **ReplayMod** (github.com/ReplayMod/ReplayMod) | GPLv3 | The primary reference to lift from. Packet recording and filtering, replay playback over a fake connection, seeking, and its ffmpeg export settings. Momenton is GPL-3.0-only for this reason; credit it in the README. |
 | **VulkanMod** | LGPL-3.0 | Read its `GpuDevice` implementation to learn which Blaze3D paths it actually supports before relying on one. |
 | **Minecraft** (via `./gradlew genSources`) | - | The authority for HUD and screen rendering order, and for every Yarn name above. |
 | **Flashback** (github.com/Moulberry/Flashback) | **All rights reserved** | Read for understanding only. Its licence is `Do not redistribute. All rights reserved.`, granting no copying or modification rights; private use does not change that. Its architecture is already documented in this file; reimplement from that, and use ReplayMod when actual code is wanted. |

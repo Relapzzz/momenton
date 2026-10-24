@@ -12,6 +12,12 @@ and frame rate than you actually played at, and HUD elements can be hidden after
 
 Works with VulkanMod. All GPU work goes through Blaze3D; the mod makes no direct OpenGL calls.
 
+## Install
+
+Requires Minecraft 1.21.11, Fabric Loader 0.19.3 or newer, Fabric API and Java 21. Put the jar from
+the Releases page in your `mods` folder. Exporting video needs ffmpeg installed and on your PATH, or
+set its location in the export screen.
+
 ## Controls
 
 F9 starts and stops recording. Recordings land in `momenton/recordings/`.
@@ -29,5 +35,14 @@ The jar lands in `build/libs/`. Use `gradlew.bat runClient` for a dev instance a
 
 ## Status
 
-See `TASKS.md` for what currently works and what is next. `IMPLEMENTATION_PLAN.md` has the design
-and the reasoning behind it.
+Early release. See `TASKS.md` for what currently works and what is next. `IMPLEMENTATION_PLAN.md` has
+the design and the reasoning behind it.
+
+Under VulkanMod, export runs at the window size and hardware encoders (Quick Sync and others) are
+turned off.
+
+## License
+
+GPL-3.0-only. Parts of the export code (encoding presets, ffmpeg discovery and process handling, and
+the export screens) are adapted from [ReplayMod](https://github.com/ReplayMod/ReplayMod), which is
+licensed under GPL-3.0. `IMPLEMENTATION_PLAN.md` lists exactly which files and what came from where.
