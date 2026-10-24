@@ -63,6 +63,10 @@ Written but unobserved work goes in **Not yet verified**.
   recording `2026-10-23_18-21-58`; 48 client mixins; no OpenGL imports. Worktrees removed.
 - The user's eighth-run recordings `2026-10-10_18-28-04` and `_18-30-32` (profile below; copies in
   `%TEMP%/mrec`) pass everything except the new command-tree check, which they predate.
+- Public since 2026-10-24: https://github.com/Relapzzz/momenton, GPL-3.0-only (ReplayMod-derived code
+  forces it), release `v1.0.0` (pre-release, jar and sources jar). History was rewritten once to the
+  GitHub noreply email and without local paths; keep absolute local paths out of tracked files. Push
+  `main` after each green build; new releases bump `mod_version` in `gradle.properties`.
 - The user tests in their own Modrinth profile (VulkanMod, HeroBot, PvP client mods):
   `C:/Users/<user>/AppData/Roaming/ModrinthApp/profiles/Asmeus Optimized/` (`logs/latest.log`,
   `momenton/recordings/`, `mods/momenton-1.0.0.jar`). Their first recording there,
